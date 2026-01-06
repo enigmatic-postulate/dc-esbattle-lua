@@ -1,4 +1,4 @@
-local assets = require("assets")
+﻿local assets = require("assets")
 local M = {}
 
 function M.spawn()
@@ -8,20 +8,21 @@ function M.spawn()
       id="hero",
       team="player",
       hp=20, hp_max=20,
-      stats={str=6, def=2, agi=99},
+      -- ✅ add int so magic damage isn't stuck at 1
+      stats={str=6, def=2, int=6, agi=99},
       status={},
       x=180, y=240, w=64, h=64,
       spr=assets.sprite("/rd/es_sprite_64.png")
     },
 
-    -- Enemies (3)
+    -- Enemies
     {
       id="slime_a",
       team="enemy",
       hp=12, hp_max=12,
       stats={str=4, def=1, agi=1},
       status={},
-      x=460, y=160, w=64, h=64,
+      x=460, y=200, w=64, h=64,
       spr=assets.sprite("/rd/es_sprite_64.png")
     },
     {
@@ -30,7 +31,7 @@ function M.spawn()
       hp=12, hp_max=12,
       stats={str=4, def=1, agi=1},
       status={},
-      x=460, y=240, w=64, h=64,
+      x=500, y=260, w=64, h=64,
       spr=assets.sprite("/rd/es_sprite_64.png")
     },
     {
