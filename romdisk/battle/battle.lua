@@ -15,40 +15,23 @@ local ui        = require("battle.ui")
 local hpbar     = require("battle.hpbar")
 local skills    = require("data.skills")
 local encounter = require("data.encounters.test_slimes")
+local assets    = require("assets")
+
+local sprite = sprite
 
 local M = {}
-local INSTANCE_ID = math.random(1000, 9999)
--- Instance stamp: 1 small sprite per instance id digit (so we can "see" it changes)
-local assets = require("assets")
-local stamp = assets.sprite("/rd/plasma.png")
-sprite.draw(stamp, 30, 30, 12, 12, 0) -- always show at least one
-
-
 local ctx = {
-  state   = "command",
-  actors  = {},
-  order   = {},
-  turn_i  = 1,
-  active  = nil,
-  pending = nil,     -- { skill=..., targets={...}, cursor_index=? }
-  anim_t  = 0,
+  actors = {},
+  order = {},
+  turn_i = 1,
+  active = nil,
+  state = "init",
+  pending = nil,
+  anim_t = 0,
 }
 
 local function alive(a)
   return a and a.hp and a.hp > 0
-end
-
-local function get_attack_skill()
-  if skills and skills.by_id and skills.by_id["attack"] then
-    return skills.by_id["attack"]
-  end
-  if skills and skills.attack then
-    return skills.attack
-  end
-  if skills and skills.list and #skills.list > 0 then
-    return skills.list[1]
-  end
-  return nil
 end
 
 local function rebuild_order()
@@ -56,8 +39,27 @@ local function rebuild_order()
   ctx.turn_i = 1
   ctx.active = ctx.order[1]
   if ctx.active then
-    turn.start_turn(ctx, ctx.active)
+    ctx.active._turn_started = true
   end
+end
+
+local function next_alive_in_order()
+  local tries = 0
+  while tries < (#ctx.order + 1) do
+    ctx.turn_i = ctx.turn_i + 1
+    if ctx.turn_i > #ctx.order then
+      -- rebuild each round to respect deaths/status
+      rebuild_order()
+    else
+      ctx.active = ctx.order[ctx.turn_i]
+    end
+    if alive(ctx.active) then
+      ctx.active._turn_started = true
+      return true
+    end
+    tries = tries + 1
+  end
+  return false
 end
 
 local function ensure_active_alive_or_advance()
@@ -75,11 +77,8 @@ function M.start()
         if a.hp_cur ~= nil then a.hp = a.hp_cur
         elseif a.hp_max ~= nil then a.hp = a.hp_max
         elseif a.stats and a.stats.hp ~= nil then a.hp = a.stats.hp
-        else a.hp = 10 end -- placeholder safety
+        end
       end
-
-      -- Canonicalize max_hp
-      a.max_hp = a.max_hp or a.hp_max or (a.stats and (a.stats.max_hp or a.stats.hp_max)) or a.hp
     end
 
 
@@ -116,34 +115,25 @@ function M.update(dt)
   if ctx.state == "command" then
     if not ensure_active_alive_or_advance() then return end
 
-    if ctx.active.team == "player" then
-      local action = ui.update(dt, ctx, ctx.active)
-      if action then
-        ctx.pending = action
-
-        local sk = ctx.pending.skill
-        local targets = ctx.pending.targets or {}
-
-        if (not sk) or ((sk.target_mode ~= "self") and (#targets == 0)) then
-          ctx.state = "turn_advance"
-        else
-          ctx.state = "resolve"
-        end
-      end
-
-    else
-      -- Enemy AI: always Attack
-      local sk = get_attack_skill()
-      if not sk then
-        -- No skills defined; just advance to keep sim alive
+    -- If enemy turn, auto-attack
+    if ctx.active.team ~= "player" then
+      local sk = skills.by_id and skills.by_id["attack"] or (skills.list and skills.list[1])
+      if sk then
+        local targets = targeting.select(ctx, ctx.active, sk.target_mode or "enemy_single", 1)
+        ctx.pending = { skill = sk, targets = targets, cursor_index = 1 }
+        ctx.state = "resolve"
+      else
         ctx.state = "turn_advance"
-        return
       end
+      return
+    end
 
-      local mode = sk.target_mode or "enemy_single"
-      local targets = targeting.select(ctx, ctx.active, mode, 1)
-
-      ctx.pending = { skill = sk, targets = targets, cursor_index = 1 }
+    -- Player UI: returns {skill, targets, cursor_index} or nil
+    local pending = ui.update(dt, ctx, ctx.active)
+    if pending then
+      ctx.pending = pending
+      local mode = (pending.skill and pending.skill.target_mode) or "none"
+      local targets = pending.targets or {}
 
       if (mode ~= "self" and #targets == 0) then
         ctx.state = "turn_advance"
@@ -170,21 +160,13 @@ function M.update(dt)
       ctx.pending.targets = targets
     end
 
-    -- If we STILL have no targets, do NOT silently advance turns.
-    -- Return to command so you can re-try (and so the failure is visible).
-    if (sk.target_mode ~= "self") and (#targets == 0) then
-      ctx.pending = nil
-      ui.reset()
-      ctx.state = "command"
-      return
-    end
-
     -- Execute skill gameplay
     local result = (sk.resolve and sk.resolve(ctx, ctx.active, targets)) or { ok=false }
 
     -- Execute skill presentation
+    -- Standard signature: present(ctx, user, result, pres, targets)
     if sk.present then
-      sk.present(pres, ctx, ctx.active, targets, result)
+      sk.present(ctx, ctx.active, result, pres, targets)
     end
 
     ctx.anim_t = 0
@@ -192,16 +174,16 @@ function M.update(dt)
     --if targets[1] then targets[1].x = targets[1].x + 3 end
 
   elseif ctx.state == "animate" then
-    ctx.anim_t = (ctx.anim_t or 0) + dt
-    if ctx.anim_t >= 0.20 and pres.done() then
+    ctx.anim_t = ctx.anim_t + dt
+    -- wait until presentation queue is done, plus minimum dwell
+    if pres.done() and ctx.anim_t > 0.20 then
       ctx.state = "turn_advance"
     end
 
   elseif ctx.state == "turn_advance" then
-    ctx.active = turn.advance(ctx)
-
-    ui.reset()
     ctx.pending = nil
+    ui.reset()
+    next_alive_in_order()
     ctx.state = "command"
 
   elseif ctx.state == "win" or ctx.state == "lose" then
