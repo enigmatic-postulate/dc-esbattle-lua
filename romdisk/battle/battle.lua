@@ -3,6 +3,8 @@
 local turn      = require("battle.turn_system")
 local targeting = require("battle.targeting")
 local pres      = require("battle.presentation")
+local fx        = require("battle.fx")
+local status    = require("battle.status")
 local ui        = require("battle.ui")
 local hpbar     = require("battle.hpbar")
 local skills    = require("data.skills")
@@ -81,6 +83,7 @@ M.start()
 
 function M.update(dt)
   pres.update(dt)
+  fx.update(dt)
 
   for _, a in ipairs(ctx.actors) do
     if a._hurt_t and a._hurt_t > 0 then
@@ -173,6 +176,11 @@ function M.update(dt)
     end
 
   elseif ctx.state == "turn_advance" then
+    -- End-of-turn status bookkeeping for the actor that just acted
+    if ctx.active then
+      status.on_turn_end(ctx, ctx.active)
+      status.tick_turns(ctx, ctx.active)
+    end
     ctx.active = turn.advance(ctx)
     ui.reset()
     ctx.pending = nil
@@ -181,38 +189,38 @@ function M.update(dt)
 end
 
 function M.draw()
-for _, a in ipairs(ctx.actors) do
-  if a and a.hp and a.hp > 0 then
-    local ox, oy = pres.offset(a)
+  for _, a in ipairs(ctx.actors) do
+    if a and a.hp and a.hp > 0 then
+      local ox, oy = pres.offset(a)
 
-    -- Enemy-only wobble: oscillate between -max and +max radians
-    local rot = 0
-    if a.team == "enemy" then
-      -- 0.10 rad ≈ 5.7 degrees. 6.0 = speed (cycles per second-ish)
-      rot = math.sin((ctx.anim_t or 0) * 6.0) * 0.10
+      local rot = 0
+      if a.team == "enemy" then
+        rot = math.sin((ctx.anim_t or 0) * 6.0) * 0.10
+      end
+
+      sprite.draw(a.spr, a.x + ox, a.y + oy, a.w, a.h, rot,
+        (a.team == "enemy") and 2 or 0)
     end
 
-    sprite.draw(
-      a.spr,
-      a.x + ox, a.y + oy,
-      a.w, a.h,
-      rot,
-      (a.team == "enemy") and 2 or 0
-    )
+    if a._hurt_t and a._hurt_t > 0 then
+      sprite.draw(assets.sprite("/rd/plasma.png"),
+        a.x, a.y - (a.h * 0.9),
+        12, 12, 0, 0)
+    end
   end
 
-  if a._hurt_t and a._hurt_t > 0 then
-    sprite.draw(assets.sprite("/rd/plasma.png"),
-      a.x, a.y - (a.h * 0.9),
-      12, 12, 0, 0)
-  end
-end
-
-
+  -- Bars under UI
   hpbar.draw_all(ctx.actors, pres)
-  ui.draw(ctx, pres)
-  pres.draw() 
 
+  -- Anything in pres.draw() (selection orb / markers / etc) should happen BEFORE fx
+  pres.draw()
+
+  -- UI menus/cursor before fx (unless you want numbers over menus too)
+  ui.draw(ctx, pres)
+
+  -- Floating numbers ALWAYS last
+  fx.draw(pres)
 end
+
 
 return M

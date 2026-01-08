@@ -2,6 +2,8 @@
 -- Skills used by battle/ui.lua and battle/battle.lua via: require("data.skills")
 
 local combat = require("battle.combat")
+local status = require("battle.status")
+local fx     = require("battle.fx")
 
 local M = {}
 
@@ -64,6 +66,9 @@ M.attack = {
     if pres and pres.hit_flash then pres.hit_flash(t, 0.12) end
     if pres and pres.recoil then pres.recoil(t, 0.10, 10) end
 
+    -- Floating number
+    fx.float_damage(t, res.dmg)
+
     t._hurt_t = 0.18
   end
 }
@@ -108,12 +113,38 @@ M.fireball = {
     -- Make it feel "simultaneous": trigger all effects in one frame
     for i = 1, #res.hits do
       local t = res.hits[i].target
+      local dmg = res.hits[i].dmg
       if t then
         if pres and pres.hit_flash then pres.hit_flash(t, 0.16) end
         if pres and pres.recoil then pres.recoil(t, 0.10, 10) end
         t._hurt_t = 0.22
+
+        -- Floating number + Burn application (2 turns)
+        fx.float_damage(t, dmg)
+        status.add(ctx, t, "burn", 2, { dot = 2 })
       end
     end
+  end
+}
+
+-- ------------------------------------------------------------
+-- GUARD (self)
+-- ------------------------------------------------------------
+M.guard = {
+  id = "guard",
+  name = "Guard",
+  target_mode = "self",
+
+  resolve = function(ctx, user, targets)
+    if not user or user.hp <= 0 then return { ok=false, reason="no_user" } end
+    status.add(ctx, user, "guard", 1)
+    return { ok=true, kind="self", target=user }
+  end,
+
+  present = function(ctx, user, res, pres, targets)
+    if not res or not res.ok or not res.target then return end
+    if pres and pres.hit_flash then pres.hit_flash(res.target, 0.20) end
+    fx.float_status(res.target, "GUARD")
   end
 }
 
@@ -130,7 +161,7 @@ M.items = {
   end
 }
 
-M.list  = { M.attack, M.fireball, M.items }
-M.by_id = { attack = M.attack, fireball = M.fireball, items = M.items }
+M.list  = { M.attack, M.fireball, M.guard, M.items }
+M.by_id = { attack = M.attack, fireball = M.fireball, guard = M.guard, items = M.items }
 
 return M

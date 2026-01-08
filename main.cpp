@@ -1,4 +1,4 @@
-#include <kos.h>
+﻿#include <kos.h>
 #include <png/png.h>
 #include <dirent.h>
 #include <dc/video.h>
@@ -41,34 +41,21 @@ static inline void queue_sprite_cmd(int idx, const SpriteCmd& cmd, SpriteFilterM
     else                 g_q_nearest[idx].push_back(cmd);
 }
 
-//static inline void emit_sprite_rot_with_hdr(Sprite* s, const SpriteCmd& c, const pvr_poly_hdr_t& hdr) {
-//    if (!s || !s->tex) return;
-//
-//    float hw = c.w * 0.5f, hh = c.h * 0.5f;
-//    float cs = fcos(c.a);
-//    float sn = fsin(c.a);
-//
-//    float lx[4] = { -hw,  hw, -hw,  hw };
-//    float ly[4] = { -hh, -hh,  hh,  hh };
-//
-//    float x[4], y[4];
-//    for (int i = 0; i < 4; ++i) {
-//        x[i] = c.cx + (lx[i] * cs - ly[i] * sn);
-//        y[i] = c.cy + (lx[i] * sn + ly[i] * cs);
-//    }
-//
-//    // Submit header once per sprite group
-//    pvr_prim(&hdr, sizeof(hdr));
-//
-//    pvr_vertex_t v;
-//    v.argb = 0xFFFFFFFF; v.oargb = 0; v.z = 1.0f;
-//
-//    // NOTE: your UVs assume full texture 0..1
-//    v.flags = PVR_CMD_VERTEX;     v.x = x[0]; v.y = y[0]; v.u = 0.0f; v.v = 0.0f; pvr_prim(&v, sizeof(v));
-//    v.flags = PVR_CMD_VERTEX;     v.x = x[1]; v.y = y[1]; v.u = 1.0f; v.v = 0.0f; pvr_prim(&v, sizeof(v));
-//    v.flags = PVR_CMD_VERTEX;     v.x = x[2]; v.y = y[2]; v.u = 0.0f; v.v = 1.0f; pvr_prim(&v, sizeof(v));
-//    v.flags = PVR_CMD_VERTEX_EOL; v.x = x[3]; v.y = y[3]; v.u = 1.0f; v.v = 1.0f; pvr_prim(&v, sizeof(v));
-//}
+struct RectCmd {
+    int list;      // PVR_LIST_OP_POLY or PVR_LIST_TR_POLY
+    float x, y, w, h;
+    float z;
+    uint32 argb;
+};
+
+static RectCmd g_rect_q[2048];
+static int g_rect_qn = 0;
+
+static inline void rectq_push(int list, float x, float y, float w, float h, float z, uint32 argb) {
+    if (g_rect_qn >= (int)(sizeof(g_rect_q) / sizeof(g_rect_q[0]))) return;
+    g_rect_q[g_rect_qn++] = { list, x, y, w, h, z, argb };
+}
+
 
 static void flush_sprite_batches() {
     // 1) NEAREST pass
@@ -156,27 +143,82 @@ static int l_dbg_set_pose(lua_State* L) {
     g_sprite_a = (float)luaL_checknumber(L, 3);
     return 0;
 }
-static void draw_rect(float x, float y, float w, float h, uint32 argb) {
-    pvr_poly_cxt_t cxt;
-    pvr_poly_hdr_t hdr;
-    pvr_vertex_t v;
+static pvr_poly_hdr_t g_rect_hdr_op, g_rect_hdr_tr;
+static int g_rect_hdr_ready = 0;
 
-    pvr_poly_cxt_col(&cxt, PVR_LIST_TR_POLY);     // translucent list (safe overlay)
-    cxt.gen.alpha = PVR_ALPHA_ENABLE;
-    pvr_poly_compile(&hdr, &cxt);
-    pvr_prim(&hdr, sizeof(hdr));
+static inline void rect_ensure_hdrs() {
+    if (g_rect_hdr_ready) return;
 
-    v.argb = argb; v.oargb = 0; v.z = 0.1f;
+    pvr_poly_cxt_t c;
 
-    v.flags = PVR_CMD_VERTEX;     v.x = x;     v.y = y;     pvr_prim(&v, sizeof(v));
-    v.flags = PVR_CMD_VERTEX;     v.x = x + w;   v.y = y;     pvr_prim(&v, sizeof(v));
-    v.flags = PVR_CMD_VERTEX;     v.x = x;     v.y = y + h;   pvr_prim(&v, sizeof(v));
-    v.flags = PVR_CMD_VERTEX_EOL; v.x = x + w;   v.y = y + h;   pvr_prim(&v, sizeof(v));
+    pvr_poly_cxt_col(&c, PVR_LIST_OP_POLY);
+    pvr_poly_compile(&g_rect_hdr_op, &c);
+
+    pvr_poly_cxt_col(&c, PVR_LIST_TR_POLY);
+    pvr_poly_compile(&g_rect_hdr_tr, &c);
+
+    g_rect_hdr_ready = 1;
 }
 
+static void rect_flush_list(int list) {
+    rect_ensure_hdrs();
+
+    // submit header once per flush
+    if (list == PVR_LIST_TR_POLY) pvr_prim(&g_rect_hdr_tr, sizeof(g_rect_hdr_tr));
+    else                         pvr_prim(&g_rect_hdr_op, sizeof(g_rect_hdr_op));
+
+    for (int i = 0; i < g_rect_qn; ++i) {
+        const RectCmd& r = g_rect_q[i];
+        if (r.list != list) continue;
+
+        pvr_vertex_t v;
+        v.argb = r.argb;
+        v.oargb = 0;
+        v.z = r.z;
+
+        v.flags = PVR_CMD_VERTEX;     v.x = r.x;       v.y = r.y;       pvr_prim(&v, sizeof(v));
+        v.flags = PVR_CMD_VERTEX;     v.x = r.x + r.w; v.y = r.y;       pvr_prim(&v, sizeof(v));
+        v.flags = PVR_CMD_VERTEX;     v.x = r.x;       v.y = r.y + r.h; pvr_prim(&v, sizeof(v));
+        v.flags = PVR_CMD_VERTEX_EOL; v.x = r.x + r.w; v.y = r.y + r.h; pvr_prim(&v, sizeof(v));
+    }
+}
+
+// call once per frame AFTER both lists have been flushed
+static void rectq_clear() {
+    g_rect_qn = 0;
+}
+
+
+// ----------------- Simple 2D overlay (Lua) -----------------
+// Expose a tiny rectangle primitive so Lua can draw HUD elements / floating numbers
+// without needing a bitmap font asset yet.
+static int l_gfx_rect(lua_State* L) {
+    float x = (float)luaL_checknumber(L, 1);
+    float y = (float)luaL_checknumber(L, 2);
+    float w = (float)luaL_checknumber(L, 3);
+    float h = (float)luaL_checknumber(L, 4);
+    uint32 argb = (uint32)luaL_checkinteger(L, 5);
+    float z = (lua_gettop(L) >= 6) ? (float)luaL_checknumber(L, 6) : 1.0f;
+
+    rectq_push(PVR_LIST_OP_POLY, x, y, w, h, z, argb);
+    return 0;
+}
+
+static int l_gfx_rect_tr(lua_State* L) {
+    float x = (float)luaL_checknumber(L, 1);
+    float y = (float)luaL_checknumber(L, 2);
+    float w = (float)luaL_checknumber(L, 3);
+    float h = (float)luaL_checknumber(L, 4);
+    uint32 argb = (uint32)luaL_checkinteger(L, 5);
+    float z = (lua_gettop(L) >= 6) ? (float)luaL_checknumber(L, 6) : 0.1f; // closer
+
+    rectq_push(PVR_LIST_TR_POLY, x, y, w, h, z, argb);
+    return 0;
+}
+
+
+
 static void draw_input_overlay() {
-    // Draw 4 boxes: Up, Down, Left, Right
-    // Bright when pressed, dark when not pressed
     auto col = [](bool pressed) { return pressed ? 0xFF00FF00 : 0xFF202020; };
 
     bool up = (g_in.buttons & CONT_DPAD_UP) == 0;
@@ -184,29 +226,30 @@ static void draw_input_overlay() {
     bool left = (g_in.buttons & CONT_DPAD_LEFT) == 0;
     bool right = (g_in.buttons & CONT_DPAD_RIGHT) == 0;
 
-    // little HUD in top-left
-    draw_rect(20, 20, 20, 20, col(up));
-    draw_rect(20, 45, 20, 20, col(down));
-    draw_rect(45, 45, 20, 20, col(left));
-    draw_rect(70, 45, 20, 20, col(right));
+    // Draw in TR list because you call this during PVR_LIST_TR_POLY
+    const int LIST = PVR_LIST_TR_POLY;
 
-    // Analog indicator: a horizontal bar that shifts with joyx, and vertical with joyy
-    float ax = (float)g_in.joyx / 128.0f; // -1..1
+    // z for overlay: smaller = “closer” in DC PVR
+    const float Z = 0.01f;
+
+    rectq_push(LIST, 20, 20, 20, 20, Z, col(up));
+    rectq_push(LIST, 20, 45, 20, 20, Z, col(down));
+    rectq_push(LIST, 45, 45, 20, 20, Z, col(left));
+    rectq_push(LIST, 70, 45, 20, 20, Z, col(right));
+
+    float ax = (float)g_in.joyx / 128.0f;
     float ay = (float)g_in.joyy / 128.0f;
 
-    // center point
     float cx = 120, cy = 45;
-    draw_rect(cx + ax * 30.0f, cy + ay * 30.0f, 6, 6, 0xFFFF0000);
+    rectq_push(LIST, cx + ax * 30.0f, cy + ay * 30.0f, 6, 6, Z, 0xFFFF0000);
 
     float fx = fsin(g_sprite_a);
     float fy = -fcos(g_sprite_a);
 
-    // green dot = in front of sprite
-    draw_rect(g_sprite_x + fx * 40.0f - 3.0f, g_sprite_y + fy * 40.0f - 3.0f, 6, 6, 0xFF00FF00);
-
-    // red dot = behind sprite
-    draw_rect(g_sprite_x - fx * 40.0f - 3.0f, g_sprite_y - fy * 40.0f - 3.0f, 6, 6, 0xFFFF0000);
+    rectq_push(LIST, g_sprite_x + fx * 40.0f - 3.0f, g_sprite_y + fy * 40.0f - 3.0f, 6, 6, Z, 0xFF00FF00);
+    rectq_push(LIST, g_sprite_x - fx * 40.0f - 3.0f, g_sprite_y - fy * 40.0f - 3.0f, 6, 6, Z, 0xFFFF0000);
 }
+
 
 
 // ----------------- DIR INT --------------------
@@ -409,12 +452,22 @@ static void register_api(lua_State* L) {
     lua_pushcfunction(L, l_input_axis); lua_setfield(L, -2, "axis");
     lua_setglobal(L, "input");
 
+    // gfx table (minimal 2D primitives)
+    lua_newtable(L);
+    lua_pushcfunction(L, l_gfx_rect); lua_setfield(L, -2, "rect");
+    lua_setglobal(L, "gfx");
+
     //debug table
     lua_newtable(L);
     lua_pushcfunction(L, l_dbg_print);     lua_setfield(L, -2, "print");
     lua_pushcfunction(L, l_dbg_set_pose);  lua_setfield(L, -2, "set_pose");
     lua_setglobal(L, "dbg");
 
+    //rect/rect translucent
+    lua_newtable(L);
+    lua_pushcfunction(L, l_gfx_rect);    lua_setfield(L, -2, "rect");
+    lua_pushcfunction(L, l_gfx_rect_tr); lua_setfield(L, -2, "rect_tr");
+    lua_setglobal(L, "gfx");
 }
 
 static void call_lua_fn_1f(lua_State* L, const char* fn, float arg) {
@@ -527,16 +580,28 @@ int main(int, char**) {
 
         pvr_list_begin(PVR_LIST_OP_POLY);
         call_lua_fn_0(L, "draw");
-        flush_sprite_batches();          // ADD
+        flush_sprite_batches();
+
+        // ✅ flush OP rects that Lua queued (if any)
+        rect_flush_list(PVR_LIST_OP_POLY);
+
         pvr_list_finish();
 
-        // overlay primitives
         pvr_list_begin(PVR_LIST_TR_POLY);
         draw_input_overlay();
+
+        // ✅ flush TR rects that Lua queued (your floating numbers)
+        rect_flush_list(PVR_LIST_TR_POLY);
+
         pvr_list_finish();
 
         pvr_scene_finish();
         vid_waitvbl();
+
+        // ✅ clear queue AFTER frame is done
+        rectq_clear();
+
+
 
 
 

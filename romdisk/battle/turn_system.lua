@@ -1,5 +1,7 @@
 local M = {}
 
+local status = require("battle.status")
+
 local function alive(a) return a and a.hp and a.hp > 0 end
 
 function M.build_order(actors)
@@ -15,24 +17,10 @@ function M.build_order(actors)
   return list
 end
 
-local function tick_status(actor)
-  if not actor.status then return end
-  local i = 1
-  while i <= #actor.status do
-    local s = actor.status[i]
-    s.turns = (s.turns or 0) - 1
-    if s.turns <= 0 then
-      actor.status[i] = actor.status[#actor.status]
-      actor.status[#actor.status] = nil
-    else
-      i = i + 1
-    end
-  end
-end
-
 function M.start_turn(ctx, actor)
-  -- decrement timed statuses at start of actor's turn
-  tick_status(actor)
+  -- Status hooks (DOT, skip-turn, etc.)
+  local r = status.on_turn_start(ctx, actor)
+  return (r and r.can_act) or false
 end
 
 function M.advance(ctx)
@@ -45,8 +33,14 @@ function M.advance(ctx)
 
     local a = ctx.order[ctx.turn_i]
     if alive(a) then
-      M.start_turn(ctx, a)
-      return a
+      local can_act = M.start_turn(ctx, a)
+      if can_act then
+        return a
+      else
+        -- Skipped/invalid turn still consumes duration
+        status.on_turn_end(ctx, a)
+        status.tick_turns(ctx, a)
+      end
     end
     tries = tries + 1
   end

@@ -1,6 +1,6 @@
 ﻿-- /rd/battle/ui.lua
 -- Mario RPG-like flow (no text):
--- HOME: Attack / Fireball / Items
+-- HOME: Attack / Fireball / Guard
 -- TARGET: pick a single enemy (Attack only)
 -- Fireball is AOE: confirms immediately and battle.lua selects enemy_all targets.
 
@@ -20,7 +20,7 @@ local cursor = {
 }
 
 local ui_state = "home"   -- "home" | "target"
-local home_i = 1          -- 1=Attack, 2=Fireball, 3=Items
+local home_i = 1          -- 1=Attack, 2=Fireball, 3=Guard
 local target_i = 1
 local target_entry_lock = 0
 
@@ -32,6 +32,7 @@ if not skills.list then
   skills.list = {}
   if skills.attack   then skills.list[#skills.list+1] = skills.attack end
   if skills.fireball then skills.list[#skills.list+1] = skills.fireball end
+  if skills.guard    then skills.list[#skills.list+1] = skills.guard end
   if skills.items    then skills.list[#skills.list+1] = skills.items end
 end
 if not skills.by_id then
@@ -96,6 +97,10 @@ local function fireball_skill()
   return skills.by_id and skills.by_id["fireball"]
 end
 
+local function guard_skill()
+  return skills.by_id and skills.by_id["guard"]
+end
+
 function M.update(dt, ctx, user)
   cursor.bob = cursor.bob + dt
   probe.update()
@@ -143,8 +148,11 @@ function M.update(dt, ctx, user)
         return { skill = sk, targets = {}, cursor_index = 1 }
 
       else
-        -- Items placeholder
-        return nil
+        -- Guard (self)
+        local sk = guard_skill()
+        if not sk then return nil end
+        ui_state = "home"
+        return { skill = sk, targets = { user }, cursor_index = 1 }
       end
     end
 
