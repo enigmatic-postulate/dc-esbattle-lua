@@ -3,6 +3,7 @@
 #include <dirent.h>
 #include <dc/video.h>
 #include <string>
+#include <vector>
 extern "C" {
 #include <lua/lua.h>
 #include <lua/lauxlib.h>
@@ -12,13 +13,120 @@ extern "C" {
 struct Sprite {
     kos_img_t img;
     pvr_ptr_t tex;
+    pvr_poly_hdr_t hdr_nearest;   // ADD
+    pvr_poly_hdr_t hdr_bilinear;  // ADD
 };
+
 
 static Sprite g_sprites[16];
 static int g_sprite_count = 0;
 
 static char g_dbg_line[128] = "dbg: (empty)";
 static volatile int g_dbg_dirty = 1;
+
+// --- Sprite batching by filter (ADD) ---
+enum SpriteFilterMode : int { SF_NEAREST = 0, SF_BILINEAR = 1 };
+
+struct SpriteCmd {
+    float cx, cy, w, h, a;
+};
+
+// 16 sprites max, two filter buckets
+static std::vector<SpriteCmd> g_q_nearest[16];
+static std::vector<SpriteCmd> g_q_bilinear[16];
+
+static inline void queue_sprite_cmd(int idx, const SpriteCmd& cmd, SpriteFilterMode f) {
+    if (idx < 0 || idx >= 16) return;
+    if (f == SF_BILINEAR) g_q_bilinear[idx].push_back(cmd);
+    else                 g_q_nearest[idx].push_back(cmd);
+}
+
+//static inline void emit_sprite_rot_with_hdr(Sprite* s, const SpriteCmd& c, const pvr_poly_hdr_t& hdr) {
+//    if (!s || !s->tex) return;
+//
+//    float hw = c.w * 0.5f, hh = c.h * 0.5f;
+//    float cs = fcos(c.a);
+//    float sn = fsin(c.a);
+//
+//    float lx[4] = { -hw,  hw, -hw,  hw };
+//    float ly[4] = { -hh, -hh,  hh,  hh };
+//
+//    float x[4], y[4];
+//    for (int i = 0; i < 4; ++i) {
+//        x[i] = c.cx + (lx[i] * cs - ly[i] * sn);
+//        y[i] = c.cy + (lx[i] * sn + ly[i] * cs);
+//    }
+//
+//    // Submit header once per sprite group
+//    pvr_prim(&hdr, sizeof(hdr));
+//
+//    pvr_vertex_t v;
+//    v.argb = 0xFFFFFFFF; v.oargb = 0; v.z = 1.0f;
+//
+//    // NOTE: your UVs assume full texture 0..1
+//    v.flags = PVR_CMD_VERTEX;     v.x = x[0]; v.y = y[0]; v.u = 0.0f; v.v = 0.0f; pvr_prim(&v, sizeof(v));
+//    v.flags = PVR_CMD_VERTEX;     v.x = x[1]; v.y = y[1]; v.u = 1.0f; v.v = 0.0f; pvr_prim(&v, sizeof(v));
+//    v.flags = PVR_CMD_VERTEX;     v.x = x[2]; v.y = y[2]; v.u = 0.0f; v.v = 1.0f; pvr_prim(&v, sizeof(v));
+//    v.flags = PVR_CMD_VERTEX_EOL; v.x = x[3]; v.y = y[3]; v.u = 1.0f; v.v = 1.0f; pvr_prim(&v, sizeof(v));
+//}
+
+static void flush_sprite_batches() {
+    // 1) NEAREST pass
+    for (int i = 0; i < g_sprite_count; ++i) {
+        if (g_q_nearest[i].empty()) continue;
+        Sprite* s = &g_sprites[i];
+        // submit header once, then all quads
+        pvr_prim(&s->hdr_nearest, sizeof(s->hdr_nearest));
+        for (const auto& c : g_q_nearest[i]) {
+            // emit vertices only (no header inside)
+            float hw = c.w * 0.5f, hh = c.h * 0.5f;
+            float cs = fcos(c.a), sn = fsin(c.a);
+            float lx[4] = { -hw,  hw, -hw,  hw };
+            float ly[4] = { -hh, -hh,  hh,  hh };
+            float x[4], y[4];
+            for (int k = 0; k < 4; ++k) {
+                x[k] = c.cx + (lx[k] * cs - ly[k] * sn);
+                y[k] = c.cy + (lx[k] * sn + ly[k] * cs);
+            }
+
+            pvr_vertex_t v;
+            v.argb = 0xFFFFFFFF; v.oargb = 0; v.z = 1.0f;
+
+            v.flags = PVR_CMD_VERTEX;     v.x = x[0]; v.y = y[0]; v.u = 0.0f; v.v = 0.0f; pvr_prim(&v, sizeof(v));
+            v.flags = PVR_CMD_VERTEX;     v.x = x[1]; v.y = y[1]; v.u = 1.0f; v.v = 0.0f; pvr_prim(&v, sizeof(v));
+            v.flags = PVR_CMD_VERTEX;     v.x = x[2]; v.y = y[2]; v.u = 0.0f; v.v = 1.0f; pvr_prim(&v, sizeof(v));
+            v.flags = PVR_CMD_VERTEX_EOL; v.x = x[3]; v.y = y[3]; v.u = 1.0f; v.v = 1.0f; pvr_prim(&v, sizeof(v));
+        }
+        g_q_nearest[i].clear();
+    }
+
+    // 2) BILINEAR pass
+    for (int i = 0; i < g_sprite_count; ++i) {
+        if (g_q_bilinear[i].empty()) continue;
+        Sprite* s = &g_sprites[i];
+        pvr_prim(&s->hdr_bilinear, sizeof(s->hdr_bilinear));
+        for (const auto& c : g_q_bilinear[i]) {
+            float hw = c.w * 0.5f, hh = c.h * 0.5f;
+            float cs = fcos(c.a), sn = fsin(c.a);
+            float lx[4] = { -hw,  hw, -hw,  hw };
+            float ly[4] = { -hh, -hh,  hh,  hh };
+            float x[4], y[4];
+            for (int k = 0; k < 4; ++k) {
+                x[k] = c.cx + (lx[k] * cs - ly[k] * sn);
+                y[k] = c.cy + (lx[k] * sn + ly[k] * cs);
+            }
+
+            pvr_vertex_t v;
+            v.argb = 0xFFFFFFFF; v.oargb = 0; v.z = 1.0f;
+
+            v.flags = PVR_CMD_VERTEX;     v.x = x[0]; v.y = y[0]; v.u = 0.0f; v.v = 0.0f; pvr_prim(&v, sizeof(v));
+            v.flags = PVR_CMD_VERTEX;     v.x = x[1]; v.y = y[1]; v.u = 1.0f; v.v = 0.0f; pvr_prim(&v, sizeof(v));
+            v.flags = PVR_CMD_VERTEX;     v.x = x[2]; v.y = y[2]; v.u = 0.0f; v.v = 1.0f; pvr_prim(&v, sizeof(v));
+            v.flags = PVR_CMD_VERTEX_EOL; v.x = x[3]; v.y = y[3]; v.u = 1.0f; v.v = 1.0f; pvr_prim(&v, sizeof(v));
+        }
+        g_q_bilinear[i].clear();
+    }
+}
 
 
 struct InputState {
@@ -162,6 +270,23 @@ static int l_sprite_load(lua_State* L) {
     // Upload texture
     pvr_txr_load_kimg(&s->img, s->tex, PVR_TXRLOAD_16BPP);
 
+    // Build two headers for this sprite (ADD)
+    pvr_poly_cxt_t cxt;
+
+    // Nearest
+    pvr_poly_cxt_txr(&cxt, PVR_LIST_OP_POLY,
+        PVR_TXRFMT_RGB565 | PVR_TXRFMT_TWIDDLED,
+        s->img.w, s->img.h, s->tex,
+        PVR_FILTER_NONE);
+    pvr_poly_compile(&s->hdr_nearest, &cxt);
+
+    // Bilinear
+    pvr_poly_cxt_txr(&cxt, PVR_LIST_OP_POLY,
+        PVR_TXRFMT_RGB565 | PVR_TXRFMT_TWIDDLED,
+        s->img.w, s->img.h, s->tex,
+        PVR_FILTER_BILINEAR);
+    pvr_poly_compile(&s->hdr_bilinear, &cxt);
+
     // Return handle (1..N)
     g_sprite_count++;
     lua_pushinteger(L, g_sprite_count);
@@ -212,13 +337,22 @@ static int l_sprite_draw(lua_State* L) {
     float h = (float)luaL_checknumber(L, 5);
     float a = (float)luaL_checknumber(L, 6);
 
-    if (handle < 1 || handle > g_sprite_count) return 0;
-    Sprite* s = &g_sprites[handle - 1];
+    // OPTIONAL 7th arg: filter (0=nearest, 2=bilinear) (ADD)
+    int filter = 0;
+    if (lua_gettop(L) >= 7 && lua_isnumber(L, 7)) {
+        filter = (int)lua_tointeger(L, 7);
+    }
 
-    draw_sprite_rot(s, x, y, w, h, a);
+    if (handle < 1 || handle > g_sprite_count) return 0;
+
+    int idx = handle - 1;
+    SpriteCmd cmd{ x, y, w, h, a };
+
+    SpriteFilterMode f = (filter == 2) ? SF_BILINEAR : SF_NEAREST;
+    queue_sprite_cmd(idx, cmd, f);
+
     return 0;
 }
-
 
 // ----------------- Input (C) -----------------
 static bool down_dpad(uint32 mask) {
@@ -393,6 +527,7 @@ int main(int, char**) {
 
         pvr_list_begin(PVR_LIST_OP_POLY);
         call_lua_fn_0(L, "draw");
+        flush_sprite_batches();          // ADD
         pvr_list_finish();
 
         // overlay primitives

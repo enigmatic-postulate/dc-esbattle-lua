@@ -195,7 +195,7 @@ function M.draw(ctx, pres)
     sprite.draw(cursor.spr,
       ctx.active.x + ox,
       ctx.active.y + oy - (ctx.active.h * 0.75) + bob,
-      cursor.base_w * 1.4, cursor.base_h * 1.4, 0)
+      cursor.base_w * 1.4, cursor.base_h * 1.4, 0,0)
     return
   end
 
@@ -210,7 +210,7 @@ function M.draw(ctx, pres)
       local sel = (i == home_i)
       local s = sel and 1.55 or 1.0
       local px = base_x + (i - 2.0) * spacing
-      sprite.draw(cursor.spr, px, base_y, cursor.base_w * s, cursor.base_h * s, 0)
+      sprite.draw(cursor.spr, px, base_y, cursor.base_w * s, cursor.base_h * s, 0,0)
     end
 
     -- Fireball preview: cursor over ALL enemies
@@ -221,7 +221,7 @@ function M.draw(ctx, pres)
         sprite.draw(cursor.spr,
           e.x + ex,
           e.y + ey - (e.h * 0.75) + bob,
-          cursor.base_w * 1.25, cursor.base_h * 1.25, 0)
+          cursor.base_w * 1.25, cursor.base_h * 1.25, 0,0)
       end
     end
 
@@ -236,7 +236,7 @@ function M.draw(ctx, pres)
     sprite.draw(cursor.spr,
       t.x + tox,
       t.y + toy - (t.h * 0.75) + bob,
-      cursor.base_w * 1.6, cursor.base_h * 1.6, 0)
+      cursor.base_w * 1.6, cursor.base_h * 1.6, 0,0)
   end
 end
 

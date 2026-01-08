@@ -181,20 +181,38 @@ function M.update(dt)
 end
 
 function M.draw()
-  for _, a in ipairs(ctx.actors) do
-    if a and a.hp and a.hp > 0 then
-      local ox, oy = pres.offset(a)
-      sprite.draw(a.spr, a.x + ox, a.y + oy, a.w, a.h, 0)
+for _, a in ipairs(ctx.actors) do
+  if a and a.hp and a.hp > 0 then
+    local ox, oy = pres.offset(a)
+
+    -- Enemy-only wobble: oscillate between -max and +max radians
+    local rot = 0
+    if a.team == "enemy" then
+      -- 0.10 rad ≈ 5.7 degrees. 6.0 = speed (cycles per second-ish)
+      rot = math.sin((ctx.anim_t or 0) * 6.0) * 0.10
     end
 
-    if a._hurt_t and a._hurt_t > 0 then
-      sprite.draw(assets.sprite("/rd/plasma.png"), a.x, a.y - (a.h * 0.9), 12, 12, 0)
-    end
+    sprite.draw(
+      a.spr,
+      a.x + ox, a.y + oy,
+      a.w, a.h,
+      rot,
+      (a.team == "enemy") and 2 or 0
+    )
   end
+
+  if a._hurt_t and a._hurt_t > 0 then
+    sprite.draw(assets.sprite("/rd/plasma.png"),
+      a.x, a.y - (a.h * 0.9),
+      12, 12, 0, 0)
+  end
+end
+
 
   hpbar.draw_all(ctx.actors, pres)
   ui.draw(ctx, pres)
-  pres.draw()
+  pres.draw() 
+
 end
 
 return M
