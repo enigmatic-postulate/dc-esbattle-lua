@@ -26,6 +26,13 @@ void sprite_draw(Sprite s, float x, float y, float w, float h, float a, int filt
     fprintf(g_trace, "S %s %.9g %.9g %.9g %.9g %.9g %d\n", g_paths[s - 1], x, y, w, h, a, filter == 2 ? 2 : 0);
 }
 
+void sprite_draw_uv(Sprite s, float x, float y, float w, float h, float a,
+                    float u0, float v0, float u1, float v1, int filter) {
+    if (s < 1 || s > g_nsprites) return;
+    fprintf(g_trace, "S %s %.9g %.9g %.9g %.9g %.9g %d %.9g %.9g %.9g %.9g\n", g_paths[s - 1], x, y, w, h, a,
+            filter == 2 ? 2 : 0, u0, v0, u1, v1);
+}
+
 void gfx_rect(float x, float y, float w, float h, uint32_t argb, float z) {
     fprintf(g_trace, "R OP %.9g %.9g %.9g %.9g %08X %.9g\n", x, y, w, h, (unsigned)argb, z);
 }

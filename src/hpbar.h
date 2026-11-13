@@ -2,6 +2,5 @@
 #pragma once
 #include "battle_state.h"
 namespace bt {
-void hpbar_init();
 void hpbar_draw_all(BattleCtx& ctx);
 }

@@ -1,6 +1,6 @@
 // ui.cpp - port of battle/ui.lua
 #include "ui.h"
-#include "assets.h"
+#include "icons.h"
 #include "input_probe.h"
 #include "presentation.h"
 #include "skills.h"
@@ -9,12 +9,15 @@
 namespace bt {
 
 static const real TARGET_ENTRY_LOCK_S = (real)0.25;
-static const real CURSOR_BASE_W = 18, CURSOR_BASE_H = 18;
+// Layout (px). Icons are drawn at multiples of 16 to stay crisp.
+static const real RING_SPACING  = 44;   // command ring: Attack / Fireball / Guard
+static const real RING_LIFT     = 28;   // ring centre above the actor's top edge
+static const real MARKER_LIFT   = 20;   // target cursor / turn marker above the top edge
+static const Icon RING_ICON[3]  = { ICON_SWORD, ICON_FLAME, ICON_SHIELD };
 
 static const eng::Key UB_KEY[UB_COUNT] = { eng::KEY_FIRE, eng::KEY_LEFT, eng::KEY_RIGHT, eng::KEY_B, eng::KEY_Y };
 
 void ui_init(BattleCtx& ctx) {
-    ctx.ui.cursor_spr = asset_sprite("/rd/plasma.png");
     ctx.ui.bob = 0;
     probe_init(ctx);
 }
@@ -115,49 +118,48 @@ bool ui_update(BattleCtx& ctx, real dt, Actor& user, PendingAction& out) {
     return false;
 }
 
-static void draw_cursor(const BattleCtx& ctx, const Actor& a, real bob, real scale) {
+static void draw_marker(const BattleCtx& ctx, const Actor& a, real bob, Icon icon) {
     real ox, oy;
     pres_offset(ctx, &a, ox, oy);
-    eng::sprite_draw(ctx.ui.cursor_spr, (float)(a.x + ox), (float)(a.y + oy - (a.h * (real)0.75) + bob),
-                     (float)(CURSOR_BASE_W * scale), (float)(CURSOR_BASE_H * scale), 0, 0);
+    icon_draw(icon, a.x + ox, a.y + oy - a.h * (real)0.5 - MARKER_LIFT + bob, ICON_2X);
 }
 
 void ui_draw(BattleCtx& ctx) {
     Ui& ui = ctx.ui;
     Actor* act = ctx.active;
     if (!act || act->hp <= 0) return;
-    if (!ui.cursor_spr) return;
 
     probe_draw(ctx);
 
     real bob = sin(ui.bob * (real)7.0) * (real)4.0;
 
     if (act->team != Team::Player) {   // enemy turn: marker over the acting enemy
-        draw_cursor(ctx, *act, bob, (real)1.4);
+        draw_marker(ctx, *act, bob, ICON_ENEMY_TURN);
         return;
     }
+
+    // Player selection indicators (ring, previews, target cursor) only while choosing a
+    // command; the Lua build kept drawing them through resolve/animate, covering hit sparks.
+    if (ctx.state != BattleState::Command) return;
 
     if (ui.state == UiState::Home) {
         real ox, oy;
         pres_offset(ctx, act, ox, oy);
         real base_x = act->x + ox;
-        real base_y = act->y + oy - (act->h * (real)0.75) + bob;
-        const real spacing = 28;
+        real base_y = act->y + oy - act->h * (real)0.5 - RING_LIFT + bob;
         for (int i = 0; i < 3; ++i) {
-            real s = (i == ui.home_i) ? (real)1.55 : (real)1.0;
-            real px = base_x + (i - (real)1.0) * spacing;
-            eng::sprite_draw(ui.cursor_spr, (float)px, (float)base_y,
-                             (float)(CURSOR_BASE_W * s), (float)(CURSOR_BASE_H * s), 0, 0);
+            real size = (i == ui.home_i) ? ICON_3X : ICON_2X;   // selected command is enlarged
+            icon_draw(RING_ICON[i], base_x + (i - (real)1.0) * RING_SPACING, base_y, size);
         }
-        if (ui.home_i == 1) {   // fireball preview: cursor over ALL enemies
+        if (ui.home_i == 1) {   // fireball preview: target cursor over ALL enemies
             ActorList enemies = alive_enemies(ctx, *act);
-            for (Actor* e : enemies) draw_cursor(ctx, *e, bob, (real)1.25);
+            for (Actor* e : enemies) draw_marker(ctx, *e, bob, ICON_TARGET);
         }
     } else {
         ActorList cand = alive_enemies(ctx, *act);
         if (cand.empty()) return;
         ui.target_i = clampv(ui.target_i, 0, cand.size() - 1);   // LEGACY: draw() mutates state
-        draw_cursor(ctx, *cand[ui.target_i], bob, (real)1.6);
+        draw_marker(ctx, *cand[ui.target_i], bob, ICON_TARGET);
     }
 }
 

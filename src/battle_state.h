@@ -82,7 +82,6 @@ struct PresFlash { Actor* actor; real t, dur; };
 struct Presentation {
     FixedVec<PresMove, MAX_MOVES>    moves;
     FixedVec<PresFlash, MAX_FLASHES> flashes;
-    eng::Sprite flash_spr = 0;
 };
 
 // ---- fx.lua module state -----------------------------------------------------
@@ -100,8 +99,6 @@ struct Fx {
 enum UiButton { UB_FIRE, UB_LEFT, UB_RIGHT, UB_B, UB_Y, UB_COUNT };
 enum class UiState : uint8_t { Home, Target };
 struct Ui {
-    eng::Sprite cursor_spr = 0;
-    eng::Sprite probe_spr  = 0;
     real    bob = 0;
     UiState state = UiState::Home;
     int     home_i = 0;              // 0=Attack 1=Fireball 2=Guard (Lua 1..3)

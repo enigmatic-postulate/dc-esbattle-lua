@@ -1,13 +1,12 @@
 // presentation.cpp - port of battle/presentation.lua
 #include "presentation.h"
-#include "assets.h"
+#include "icons.h"
 
 namespace bt {
 
 void pres_init(BattleCtx& ctx) {
     ctx.pres.moves.clear();
     ctx.pres.flashes.clear();
-    ctx.pres.flash_spr = asset_sprite("/rd/plasma.png");
 }
 
 static void push_move(BattleCtx& ctx, Actor* a, real dur, real nx, real ny, real dist) {
@@ -63,7 +62,7 @@ bool pres_done(const BattleCtx& ctx) { return ctx.pres.moves.empty() && ctx.pres
 void pres_draw(BattleCtx& ctx) {
     for (const PresFlash& f : ctx.pres.flashes) {
         const Actor* a = f.actor;
-        if (a) eng::sprite_draw(ctx.pres.flash_spr, (float)a->x, (float)(a->y - (a->h * (real)0.75)), 14, 14, 0);
+        if (a) icon_draw(ICON_SPARK, a->x, a->y - (a->h * (real)0.75), ICON_2X);
     }
 }
 

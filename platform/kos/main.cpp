@@ -41,7 +41,7 @@ static int g_sprite_count = 0;
 
 // --- Sprite batching by filter ----------------------------------------------
 enum SpriteFilterMode : int { SF_NEAREST = 0, SF_BILINEAR = 1 };
-struct SpriteCmd { float cx, cy, w, h, a; };
+struct SpriteCmd { float cx, cy, w, h, a, u0, v0, u1, v1; };
 
 static std::vector<SpriteCmd> g_q_nearest[16];
 static std::vector<SpriteCmd> g_q_bilinear[16];
@@ -76,10 +76,10 @@ static void emit_sprite_quads(const pvr_poly_hdr_t* hdr, std::vector<SpriteCmd>&
         }
         pvr_vertex_t v;
         v.argb = 0xFFFFFFFF; v.oargb = 0; v.z = 1.0f;
-        v.flags = PVR_CMD_VERTEX;     v.x = x[0]; v.y = y[0]; v.u = 0.0f; v.v = 0.0f; pvr_prim(&v, sizeof(v));
-        v.flags = PVR_CMD_VERTEX;     v.x = x[1]; v.y = y[1]; v.u = 1.0f; v.v = 0.0f; pvr_prim(&v, sizeof(v));
-        v.flags = PVR_CMD_VERTEX;     v.x = x[2]; v.y = y[2]; v.u = 0.0f; v.v = 1.0f; pvr_prim(&v, sizeof(v));
-        v.flags = PVR_CMD_VERTEX_EOL; v.x = x[3]; v.y = y[3]; v.u = 1.0f; v.v = 1.0f; pvr_prim(&v, sizeof(v));
+        v.flags = PVR_CMD_VERTEX;     v.x = x[0]; v.y = y[0]; v.u = c.u0; v.v = c.v0; pvr_prim(&v, sizeof(v));
+        v.flags = PVR_CMD_VERTEX;     v.x = x[1]; v.y = y[1]; v.u = c.u1; v.v = c.v0; pvr_prim(&v, sizeof(v));
+        v.flags = PVR_CMD_VERTEX;     v.x = x[2]; v.y = y[2]; v.u = c.u0; v.v = c.v1; pvr_prim(&v, sizeof(v));
+        v.flags = PVR_CMD_VERTEX_EOL; v.x = x[3]; v.y = y[3]; v.u = c.u1; v.v = c.v1; pvr_prim(&v, sizeof(v));
     }
     q.clear();
 }
@@ -194,9 +194,14 @@ Sprite sprite_load(const char* path) {                         // was l_sprite_l
     return ++g_sprite_count;   // handle 1..N
 }
 
-void sprite_draw(Sprite handle, float x, float y, float w, float h, float a, int filter) {   // was l_sprite_draw
+void sprite_draw_uv(Sprite handle, float x, float y, float w, float h, float a,
+                    float u0, float v0, float u1, float v1, int filter) {
     if (handle < 1 || handle > g_sprite_count) return;
-    queue_sprite_cmd(handle - 1, SpriteCmd{ x, y, w, h, a }, filter == 2 ? SF_BILINEAR : SF_NEAREST);
+    queue_sprite_cmd(handle - 1, SpriteCmd{ x, y, w, h, a, u0, v0, u1, v1 }, filter == 2 ? SF_BILINEAR : SF_NEAREST);
+}
+
+void sprite_draw(Sprite handle, float x, float y, float w, float h, float a, int filter) {   // was l_sprite_draw
+    sprite_draw_uv(handle, x, y, w, h, a, 0.0f, 0.0f, 1.0f, 1.0f, filter);
 }
 
 void gfx_rect(float x, float y, float w, float h, uint32_t argb, float z)    { rectq_push(PVR_LIST_OP_POLY, x, y, w, h, z, argb); }
@@ -244,7 +249,7 @@ int main(int, char**) {
          (unsigned)((uintptr_t)&g_rect_hdr_op & 31), (void*)&g_diag_frame);
 
     check_file("/rd/es_sprite_64.png");
-    check_file("/rd/plasma.png");
+    check_file("/rd/ui_icons.png");
 
     eng::seed_random((uint32_t)timer_ms_gettime64());
 #if !defined(DIAG_SKIP_GAME)

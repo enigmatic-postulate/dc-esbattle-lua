@@ -10,6 +10,7 @@ volatile uint32_t g_calls = 0;
 namespace eng {
 Sprite sprite_load(const char*) { static int n = 0; return ++n; }
 void sprite_draw(Sprite, float, float, float, float, float, int) { g_calls = g_calls + 1; }
+void sprite_draw_uv(Sprite, float, float, float, float, float, float, float, float, float, int) { g_calls = g_calls + 1; }
 void gfx_rect(float, float, float, float, uint32_t, float) { g_calls = g_calls + 1; }
 void gfx_rect_tr(float, float, float, float, uint32_t, float) { g_calls = g_calls + 1; }
 bool input_down(Key k) { return (g_btn >> k) & 1; }

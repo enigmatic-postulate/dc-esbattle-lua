@@ -160,7 +160,9 @@ Each item was confirmed by running the **original scripts** in the harness. Each
 | 12 | Low | `ui.draw` changes `target_i` (clamps it); a stray `sprite.draw` runs at module load | `ui.lua`, `battle.lua` | move the clamp to update; delete the stray draw |
 | 13 | Low | The same `plasma.png` is uploaded 4× (4 of 16 slots); `dbg.print` output is never shown | `presentation/ui/input_probe.lua`, `main.cpp` | the port uses one cached texture and logs via `dbglog` |
 
-Adjacent finding, outside Lua: `es_sprite_64.png` is **1024×1024**, so it takes 2 MiB of the 8 MiB VRAM to draw at 64×64. Downscale the source to 64×64.
+> **Correction, added after the first hardware screenshot.** Button polarity is inverted in `main.cpp`. I confirmed this by disassembling your KOS controller driver (`cont_reply` stores `buttons = ~raw & 0xFFFF`), which makes `cont_state_t.buttons` **active-high (1 = pressed)**. The original `main.cpp`, and the port, which copied it, test `(buttons & mask) == 0`, so at rest **every button reads as held**. That is why the d-pad overlay is all green and the debug strip shows every button pressed. `ui.lua`'s "idle baseline" (item 3) is the workaround that makes the inverted input usable: a real press changes the reading. **Consequence for item 3's fix:** correcting the polarity and replacing the idle baseline with edge detection must be **one change**. Either one alone breaks menu input (the game auto-acts). Item 2 is unaffected. Plan: `docs/NEXT_SLICE.md`, task A1.
+
+Adjacent finding, outside Lua: `es_sprite_64.png` was **1024×1024**, taking 2 MiB of the 8 MiB VRAM to draw at 64×64. **Done:** it is now 64×64. The downscale is lossless, because the source was an exact 16× upscale.
 
 ---
 
@@ -246,8 +248,13 @@ Coverage (gcov over the whole suite): every line of the port that current conten
 ```
 REPORT.md                     this document
 results/                      raw logs: suite_f64.log, suite_f32.log, mutation.log
+TRIAGE.md                     crash triage procedure (DIAG builds) + tools/symbolize_crash.py
+docs/NEXT_SLICE.md            cleanup summary, plan and definition of done for the field -> battle slice
+docs/before_after.png         rendered comparison of the old and new battle presentation
+tools/make_assets.py          placeholder art source (pixel grids) -> romdisk/ui_icons.png
+tools/render_trace.py         approximate PVR rasterizer: trace frame -> PNG (previews without hardware)
 makefile                      KOS build (no -llua) + `make host` for the harness binaries
-romdisk/                      PNGs only
+romdisk/                      es_sprite_64.png (64x64), ui_icons.png (icon atlas); no .lua
 src/                          portable game code, one .cpp per Lua module
   common.h engine.h battle_state.h
   battle combat status targeting turn_system skills encounters

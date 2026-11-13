@@ -6,6 +6,7 @@
 #include "encounters.h"
 #include "fx.h"
 #include "hpbar.h"
+#include "icons.h"
 #include "presentation.h"
 #include "skills.h"
 #include "status.h"
@@ -15,8 +16,7 @@
 
 namespace bt {
 
-static BattleCtx   g_ctx;
-static eng::Sprite g_plasma = 0;
+static BattleCtx g_ctx;
 
 BattleCtx& battle_ctx() { return g_ctx; }
 
@@ -50,14 +50,9 @@ void battle_start() {
 }
 
 void battle_init() {
-    // Module-load order mirrors the Lua require() chain.
+    icons_init();
     pres_init(g_ctx);
     ui_init(g_ctx);
-    hpbar_init();
-    g_plasma = asset_sprite("/rd/plasma.png");
-    // LEGACY: battle.lua drew a stray 12x12 stamp at module load (outside draw()),
-    // which the engine flushed during the first frame. Kept for trace parity.
-    eng::sprite_draw(g_plasma, 30, 30, 12, 12, 0);
     battle_start();
 }
 
@@ -157,7 +152,7 @@ void battle_draw() {
                              (float)rot, a.team == Team::Enemy ? 2 : 0);
         }
         if (a.hurt_t > 0)   // drawn even for the dead: brief marker on the killing blow
-            eng::sprite_draw(g_plasma, (float)a.x, (float)(a.y - (a.h * (real)0.9)), 12, 12, 0, 0);
+            icon_draw(ICON_HURT, a.x + a.w * (real)0.5, a.y - a.h * (real)0.5, ICON_1X);
     }
 
     hpbar_draw_all(ctx);   // bars under UI

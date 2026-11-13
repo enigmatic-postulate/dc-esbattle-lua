@@ -3,7 +3,7 @@
 #
 TARGET = battle.elf
 
-SRC_OBJS = src/assets.o src/battle.o src/combat.o src/encounters.o src/fx.o \
+SRC_OBJS = src/assets.o src/battle.o src/combat.o src/encounters.o src/fx.o src/icons.o \
            src/hpbar.o src/input_probe.o src/presentation.o src/skills.o \
            src/status.o src/targeting.o src/turn_system.o src/ui.o
 OBJS = platform/kos/main.o $(SRC_OBJS) romdisk.o
