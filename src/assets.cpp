@@ -7,22 +7,22 @@ namespace bt {
 
 namespace {
 struct Entry { const char* path; eng::Sprite spr; };
-Entry g_cache[16];   // engine supports at most 16 sprites
+Entry g_cache[eng::MAX_SPRITES];
 int   g_count = 0;
 }
 
-eng::Sprite asset_sprite(const char* path) {
+eng::Sprite asset_sprite(const char* path, bool alpha) {
     for (int i = 0; i < g_count; ++i)
         if (strcmp(g_cache[i].path, path) == 0) return g_cache[i].spr;
 
-    eng::Sprite s = eng::sprite_load(path);
+    eng::Sprite s = eng::sprite_load(path, alpha);
     if (!s) {
         char msg[128];
         snprintf(msg, sizeof msg, "sprite.load FAILED: %s", path);
         eng::dbg_print(msg);
-        return 0;                       // not cached, like the Lua version
+        return 0;
     }
-    if (g_count < 16) g_cache[g_count++] = Entry{ path, s };  // path must be a string literal
+    if (g_count < eng::MAX_SPRITES) g_cache[g_count++] = Entry{ path, s };   // path must be a string literal
     return s;
 }
 

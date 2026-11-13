@@ -27,11 +27,11 @@ static SkillResult attack_resolve(BattleCtx&, Actor& user, const ActorList& targ
 static void attack_present(BattleCtx& ctx, Actor& user, const SkillResult& res, const ActorList&) {
     if (!res.ok || !res.target) return;
     Actor* t = res.target;
-    pres_lunge(ctx, &user, t, (real)0.10, 22);
-    pres_hit_flash(ctx, t, (real)0.12);
-    pres_recoil(ctx, t, (real)0.10, 10);
+    pres_lunge(ctx, &user, t, T_MOVE, 22);
+    pres_hit_flash(ctx, t, T_FLASH_HIT);
+    pres_recoil(ctx, t, T_MOVE, 10);
     fx_float_damage(ctx, *t, res.dmg);
-    t->hurt_t = (real)0.18;
+    t->hurt_ticks = T_HURT_HIT;
 }
 
 // ---- FIREBALL (AOE all enemies) --------------------------------------------
@@ -57,9 +57,9 @@ static void fireball_present(BattleCtx& ctx, Actor&, const SkillResult& res, con
     for (const Hit& h : res.hits) {
         Actor* t = h.target;
         if (!t) continue;
-        pres_hit_flash(ctx, t, (real)0.16);
-        pres_recoil(ctx, t, (real)0.10, 10);
-        t->hurt_t = (real)0.22;
+        pres_hit_flash(ctx, t, T_FLASH_AOE);
+        pres_recoil(ctx, t, T_MOVE, 10);
+        t->hurt_ticks = T_HURT_AOE;
         fx_float_damage(ctx, *t, h.dmg);
         // LEGACY: a rules mutation (burn) lives in the *presentation* hook, as in Lua.
         status_add(ctx, *t, StatusId::Burn, 2, 2);
@@ -79,7 +79,7 @@ static SkillResult guard_resolve(BattleCtx& ctx, Actor& user, const ActorList&) 
 
 static void guard_present(BattleCtx& ctx, Actor&, const SkillResult& res, const ActorList&) {
     if (!res.ok || !res.target) return;
-    pres_hit_flash(ctx, res.target, (real)0.20);
+    pres_hit_flash(ctx, res.target, T_FLASH_GUARD);
     fx_float_status(ctx, *res.target, "GUARD");    // LEGACY: on_apply already floated "GUARD" once
 }
 

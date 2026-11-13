@@ -1,28 +1,53 @@
-// encounters.cpp - port of data/encounters/test_slimes.lua
-// Stats are fully explicit: Lua fell back to mdef := def and int := 0 when absent.
+// encounters.cpp - see encounters.h
+// "test_slimes" reproduces data/encounters/test_slimes.lua exactly (ids, stats, positions);
+// the battle regression goldens run on it.
 #include "encounters.h"
-#include "assets.h"
+#include <string.h>
 
 namespace bt {
 
-static Actor make(const char* id, Team team, int hp, Stats st, real x, real y, eng::Sprite spr) {
+//                       str def mdef int agi
+static const Stats SLIME = { 4,  1,  1,  0,  1 };
+static const Stats GUARD = { 5,  2,  2,  0,  5 };
+
+static const EncounterDef ENCOUNTERS[] = {
+    { "test_slimes", 3, { { "slime_a", SHEET_SLIME, 12, SLIME, 460, 200 },
+                          { "slime_b", SHEET_SLIME, 12, SLIME, 500, 260 },
+                          { "slime_c", SHEET_SLIME, 12, SLIME, 460, 320 } } },
+    { "slimes_2",    2, { { "slime_a", SHEET_SLIME, 12, SLIME, 470, 220 },
+                          { "slime_b", SHEET_SLIME, 12, SLIME, 480, 300 } } },
+    { "guard_duel",  1, { { "guard",   SHEET_GUARD, 18, GUARD, 470, 250 } } },
+};
+
+PartyState party_default() {
+    PartyState p;
+    p.hero_hp = 20; p.hero_hp_max = 20;
+    p.hero_stats = Stats{ 6, 2, 2, 6, 99 };
+    return p;
+}
+
+const EncounterDef* encounter_by_id(const char* id) {
+    for (const EncounterDef& e : ENCOUNTERS) if (strcmp(e.id, id) == 0) return &e;
+    return nullptr;
+}
+
+static Actor make(const char* id, Team team, int hp, int hp_max, Stats st, real x, real y, CharSheet sheet, Dir facing) {
     Actor a;
-    a.id = id; a.team = team; a.hp = hp; a.hp_max = hp; a.stats = st;
+    a.id = id; a.team = team; a.hp = hp; a.hp_max = hp_max; a.stats = st;
     a.status.clear();
-    a.x = x; a.y = y; a.w = 64; a.h = 64; a.spr = spr; a.hurt_t = 0;
+    a.x = x; a.y = y; a.w = 64; a.h = 64;
+    a.sheet = sheet; a.facing = facing; a.hurt_ticks = 0;
     return a;
 }
 
-void spawn_test_slimes(BattleCtx& ctx) {
-    eng::Sprite spr = asset_sprite("/rd/es_sprite_64.png");
-    //                           str def mdef int agi
-    const Stats HERO  = {          6,  2,   2,  6, 99 };
-    const Stats SLIME = {          4,  1,   1,  0,  1 };
+void spawn_encounter(BattleCtx& ctx, const EncounterDef& enc, const PartyState& party) {
     ctx.actors.clear();
-    ctx.actors.push(make("hero",    Team::Player, 20, HERO,  180, 240, spr));
-    ctx.actors.push(make("slime_a", Team::Enemy,  12, SLIME, 460, 200, spr));
-    ctx.actors.push(make("slime_b", Team::Enemy,  12, SLIME, 500, 260, spr));
-    ctx.actors.push(make("slime_c", Team::Enemy,  12, SLIME, 460, 320, spr));
+    ctx.actors.push(make("hero", Team::Player, party.hero_hp, party.hero_hp_max, party.hero_stats,
+                         180, 240, SHEET_HERO, DIR_RIGHT));
+    for (int i = 0; i < enc.count; ++i) {
+        const EnemySpec& e = enc.enemies[i];
+        ctx.actors.push(make(e.id, Team::Enemy, e.hp, e.hp, e.stats, e.x, e.y, e.sheet, DIR_LEFT));
+    }
 }
 
 } // namespace bt

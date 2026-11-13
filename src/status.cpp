@@ -2,6 +2,7 @@
 #include "status.h"
 #include "combat.h"
 #include "fx.h"
+#include "presentation.h"
 
 namespace bt {
 
@@ -13,7 +14,7 @@ static void burn_on_turn_start(BattleCtx& ctx, Actor& a, StatusInst& st) {
     int dmg = st.dot;
     apply_damage(&a, dmg);
     fx_float_damage(ctx, a, dmg, 0xFFFFA040);
-    a.hurt_t = maxv(a.hurt_t, (real)0.18);
+    a.hurt_ticks = maxv(a.hurt_ticks, T_HURT_HIT);
 }
 
 static void guard_on_apply(BattleCtx& ctx, Actor& a, StatusInst&) { fx_float_status(ctx, a, "GUARD"); }

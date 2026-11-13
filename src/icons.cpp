@@ -8,7 +8,7 @@ static eng::Sprite g_atlas = 0;
 static const int   ATLAS_COLS = 4;
 static const float CELL_UV = 0.25f;   // 32 / 128
 
-void icons_init() { g_atlas = asset_sprite("/rd/ui_icons.png"); }
+void icons_init() { g_atlas = asset_sprite("/rd/ui_icons.png", true); }   // alpha: no black boxes
 
 void icon_draw(Icon icon, real cx, real cy, real size) {
     if (icon < 0 || icon >= ICON_COUNT) return;

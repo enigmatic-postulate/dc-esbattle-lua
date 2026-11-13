@@ -1,43 +1,47 @@
-// bench_main.cpp - per-frame CPU cost of the C++ port with a no-op engine (host, indicative only).
-#include "../../src/battle.h"
+// bench_main.cpp - per-tick CPU cost of the game with a no-op engine (host, indicative only).
+//   usage: bench <inputs.txt> [reps] [--battle]      (default: field game from romdisk/)
+#include "../../src/game.h"
 #include "../../src/engine.h"
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <vector>
 #include <chrono>
 
 static uint32_t g_btn = 0, g_rng = 12345;
 volatile uint32_t g_calls = 0;
 namespace eng {
-Sprite sprite_load(const char*) { static int n = 0; return ++n; }
+Sprite sprite_load(const char*, bool) { static int n = 0; return ++n; }
 void sprite_draw(Sprite, float, float, float, float, float, int) { g_calls = g_calls + 1; }
-void sprite_draw_uv(Sprite, float, float, float, float, float, float, float, float, float, int) { g_calls = g_calls + 1; }
+void sprite_draw_uv(Sprite, float, float, float, float, float, float, float, float, float, int, uint32_t, float) { g_calls = g_calls + 1; }
 void gfx_rect(float, float, float, float, uint32_t, float) { g_calls = g_calls + 1; }
 void gfx_rect_tr(float, float, float, float, uint32_t, float) { g_calls = g_calls + 1; }
 bool input_down(Key k) { return (g_btn >> k) & 1; }
 float random01() { g_rng = g_rng * 1664525u + 1013904223u; return (float)(g_rng >> 8) / 16777216.0f; }
-void dbg_print(const char*) {}
+void dbg_print(const char* s) { fprintf(stderr, "%s\n", s); }
+int file_read(const char* path, char* buf, int cap) {
+    char p[512]; snprintf(p, sizeof p, "romdisk/%s", strncmp(path, "/rd/", 4) == 0 ? path + 4 : path);
+    FILE* f = fopen(p, "rb"); if (!f) return -1;
+    int n = (int)fread(buf, 1, (size_t)cap, f); fclose(f);
+    if (n >= cap) return -1; buf[n] = 0; return n;
+}
 }
 int main(int argc, char** argv) {
-    std::vector<std::pair<float, unsigned>> fr;
+    std::vector<unsigned> fr;
     FILE* in = fopen(argv[1], "r"); char line[128];
-    while (fgets(line, sizeof line, in)) { float d; unsigned b; if (line[0] != '#' && sscanf(line, "%f %x", &d, &b) == 2) fr.push_back({d, b}); }
+    while (fgets(line, sizeof line, in)) { float d; unsigned b; if (line[0] != '#' && sscanf(line, "%f %x", &d, &b) == 2) fr.push_back(b); }
     fclose(in);
-    bt::battle_init();
-    int reps = argc > 2 ? atoi(argv[2]) : 50;
+    int reps = argc > 2 ? atoi(argv[2]) : 20;
+    bool battle = argc > 3 && !strcmp(argv[3], "--battle");
     double best = 1e9;
     for (int r = 0; r < reps; ++r) {
-        bt::battle_start();
+        if (battle) bt::game_init_battle_test("test_slimes"); else bt::game_init("/rd/maps/test_field.txt");
+        g_calls = 0;
         auto t0 = std::chrono::steady_clock::now();
-        int restarts = 0;
-        for (auto& f : fr) {
-            g_btn = f.second; bt::battle_update((bt::real)f.first); bt::battle_draw();
-            bt::BattleState st = bt::battle_ctx().state;
-            if (st == bt::BattleState::Win || st == bt::BattleState::Lose) { bt::battle_start(); ++restarts; }
-        }
-        if (r == 0) printf("cpp: battles completed: %d, engine calls %.1f/frame\n", restarts, (double)g_calls / fr.size());
+        for (unsigned b : fr) { g_btn = b; bt::game_tick(); bt::game_draw(); }
         auto t1 = std::chrono::steady_clock::now();
         double us = std::chrono::duration<double, std::micro>(t1 - t0).count() / fr.size();
         if (us < best) best = us;
     }
-    printf("cpp: %.3f us/frame host CPU (best of %d), heap allocations in loop: 0 (fixed-capacity containers)\n", best, reps);
+    printf("%s: %.3f us/tick host CPU (best of %d), %.1f engine calls/tick\n", battle ? "battle" : "field", best, reps, (double)g_calls / fr.size());
 }

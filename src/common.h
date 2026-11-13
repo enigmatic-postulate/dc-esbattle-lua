@@ -15,6 +15,12 @@ typedef double real;
 typedef float real;
 #endif
 
+// Fixed timestep (slice task A5). All gameplay timers count ticks; TICK_DT is only used
+// for continuous motion/cosmetics. Durations below were calibrated so the tick version
+// reproduces the previous float32 build running at exactly 60 Hz frame-for-frame.
+const int  TICKS_PER_SEC = 60;
+const real TICK_DT = (real)1 / (real)60;
+
 template <class T> inline T clampv(T v, T lo, T hi) { return v < lo ? lo : (v > hi ? hi : v); }
 template <class T> inline T maxv(T a, T b) { return a > b ? a : b; }
 template <class T> inline T minv(T a, T b) { return a < b ? a : b; }

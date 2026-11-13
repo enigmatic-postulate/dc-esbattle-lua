@@ -5,6 +5,7 @@ namespace bt {
 void fx_float_text_xy(BattleCtx& ctx, real x, real y, const char* text, uint32_t color);
 void fx_float_damage(BattleCtx& ctx, const Actor& a, int dmg, uint32_t color = 0xFFFFE060);
 void fx_float_status(BattleCtx& ctx, const Actor& a, const char* label, uint32_t color = 0xFF80D0FF);
-void fx_update(BattleCtx& ctx, real dt);
+const int T_FLOAT = 42;   // 0.70 s
+void fx_update(BattleCtx& ctx);
 void fx_draw(BattleCtx& ctx);
 }

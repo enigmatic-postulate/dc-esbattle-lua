@@ -1,7 +1,7 @@
 // battle_state.h - typed replacements for the Lua tables used by the battle scripts.
 //
 // Lua -> C++ mapping
-//   actor table {id,team,hp,hp_max,stats,status,x,y,w,h,spr,_hurt_t} -> Actor
+//   actor table {id,team,hp,hp_max,stats,status,x,y,w,h,spr,_hurt_t} -> Actor (spr -> sheet+facing, _hurt_t -> hurt_ticks)
 //   actor.status = { {id=..,turns=..,dot=..}, ... }                   -> FixedVec<StatusInst>
 //   target lists (arrays of actor *references*)                         -> ActorList (Actor*)
 //   ctx = {state, actors, order, turn_i, active, pending, anim_t}      -> BattleCtx
@@ -10,6 +10,7 @@
 #pragma once
 #include "common.h"
 #include "engine.h"
+#include "chars.h"
 
 namespace bt {
 
@@ -40,8 +41,9 @@ struct Actor {
     Stats       stats;
     FixedVec<StatusInst, MAX_STATUS> status;
     real        x, y, w, h;
-    eng::Sprite spr;
-    real        hurt_t;   // Lua: actor._hurt_t (nil == 0)
+    CharSheet   sheet;        // battle look (was a sprite handle)
+    Dir         facing;
+    int         hurt_ticks;   // Lua: actor._hurt_t; marker drawn while > 0
 };
 
 typedef FixedVec<Actor*, MAX_ACTORS> ActorList;
@@ -77,8 +79,8 @@ struct PendingAction {
 };
 
 // ---- presentation.lua module state -------------------------------------------
-struct PresMove  { Actor* actor; real t, dur, nx, ny, dist; };
-struct PresFlash { Actor* actor; real t, dur; };
+struct PresMove  { Actor* actor; int t, dur; real nx, ny, dist; };   // t, dur in ticks
+struct PresFlash { Actor* actor; int t, dur; };
 struct Presentation {
     FixedVec<PresMove, MAX_MOVES>    moves;
     FixedVec<PresFlash, MAX_FLASHES> flashes;
@@ -86,7 +88,8 @@ struct Presentation {
 
 // ---- fx.lua module state -----------------------------------------------------
 struct FloatText {
-    real     x, y, vx, vy, t, dur;
+    real     x, y, vx, vy;
+    int      t, dur;        // ticks
     char     text[12];
     uint32_t color;
     real     scale;
@@ -97,19 +100,19 @@ struct Fx {
 
 // ---- ui.lua + input_probe.lua module state ----------------------------------
 enum UiButton { UB_FIRE, UB_LEFT, UB_RIGHT, UB_B, UB_Y, UB_COUNT };
-enum class UiState : uint8_t { Home, Target };
+// Home: command ring. Target: pick one enemy (Attack). TargetAll: confirm an all-enemy skill (Fire).
+enum class UiState : uint8_t { Home, Target, TargetAll };
 struct Ui {
-    real    bob = 0;
+    int     bob_ticks = 0;
     UiState state = UiState::Home;
     int     home_i = 0;              // 0=Attack 1=Fireball 2=Guard (Lua 1..3)
     int     target_i = 0;            // 0-based (Lua 1-based)
-    real    target_entry_lock = 0;
-    bool    idle[UB_COUNT] = {};     // baseline sampled at reset()
-    bool    lat[UB_COUNT]  = {};     // click latches
+    int     target_entry_lock = 0;   // ticks
 };
 
 // ---- battle.lua ctx ----------------------------------------------------------
 enum class BattleState : uint8_t { Command, Resolve, Animate, TurnAdvance, Win, Lose };
+enum class BattleOutcome : uint8_t { None, Won, Lost };
 
 struct BattleCtx {
     BattleState state = BattleState::Command;
@@ -118,7 +121,10 @@ struct BattleCtx {
     int           turn_i = 0;             // 0-based index into order
     Actor*        active = nullptr;
     PendingAction pending;
-    real          anim_t = 0;
+    int           anim_ticks = 0;
+    int           result_ticks = 0;            // ticks spent in Win/Lose (banner)
+    BattleOutcome outcome = BattleOutcome::None; // set once the banner is confirmed
+    int           idle_ticks = 0;              // free-running (idle animation)
 
     Presentation pres;
     Fx           fx;

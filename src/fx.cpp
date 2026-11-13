@@ -1,5 +1,6 @@
 // fx.cpp - port of battle/fx.lua
 #include "fx.h"
+#include "font.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -49,10 +50,10 @@ static void draw_sevenseg_string(real x, real y, const char* str, real s, uint32
             draw_seg_digit(cx, y, ch - '0', s, argb);
             cx = cx + 12 * s;
         } else {
-            // Unknown glyph (incl. ALL letters): tiny block. LEGACY: "BURN"/"GUARD"/"SKIP"
-            // therefore render as rows of dots - there is no letter font yet.
-            rect(cx, y + 10 * s, 4 * s, 4 * s, argb);
-            cx = cx + 8 * s;
+            // Letters/punctuation: bitmap font (slice task A6; the Lua build drew a dot per letter).
+            char one[2] = { ch, 0 };
+            font_draw(cx, y + 5 * s, one, (int)(2 * s), argb);
+            cx = cx + 12 * s;
         }
     }
 }
@@ -63,7 +64,7 @@ void fx_float_text_xy(BattleCtx& ctx, real x, real y, const char* text, uint32_t
     f.vx = ((real)eng::random01() * 2 - 1) * 18;   // -18..+18 px/sec
     f.vy = -42;
     f.t = 0;
-    f.dur = (real)0.70;
+    f.dur = T_FLOAT;
     strncpy(f.text, text ? text : "", sizeof f.text - 1);
     f.text[sizeof f.text - 1] = '\0';
     f.color = color;
@@ -81,14 +82,14 @@ void fx_float_status(BattleCtx& ctx, const Actor& a, const char* label, uint32_t
     fx_float_text_xy(ctx, a.x, a.y - a.h * (real)0.95, label, color);
 }
 
-void fx_update(BattleCtx& ctx, real dt) {
+void fx_update(BattleCtx& ctx) {
     auto& v = ctx.fx.floats;
     int i = 0;
     while (i < v.size()) {
         FloatText& f = v[i];
-        f.t = f.t + dt;
-        f.x = f.x + (f.vx * dt);
-        f.y = f.y + (f.vy * dt);
+        f.t = f.t + 1;
+        f.x = f.x + (f.vx * TICK_DT);
+        f.y = f.y + (f.vy * TICK_DT);
         if (f.t >= f.dur) v.swap_remove(i);
         else ++i;
     }
@@ -96,7 +97,7 @@ void fx_update(BattleCtx& ctx, real dt) {
 
 void fx_draw(BattleCtx& ctx) {
     for (const FloatText& f : ctx.fx.floats) {
-        real a01 = (real)1.0 - (f.t / f.dur);
+        real a01 = (real)1.0 - ((real)f.t / (real)f.dur);
         draw_sevenseg_string(f.x, f.y, f.text, f.scale, with_alpha(f.color, a01));
     }
 }

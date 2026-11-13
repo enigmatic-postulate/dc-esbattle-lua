@@ -1,10 +1,7 @@
-// assets.h - port of assets.lua (path -> sprite handle cache).
+// assets.h - path -> sprite handle cache (was assets.lua).
 #pragma once
 #include "engine.h"
 namespace bt {
-// Cached load. Unlike the Lua build (where presentation.lua, ui.lua and
-// input_probe.lua each called sprite.load("/rd/plasma.png") directly and uploaded
-// 4 copies of the same texture into 4 of the 16 sprite slots), every module goes
-// through this cache.
-eng::Sprite asset_sprite(const char* path);
+// Cached load; `alpha` selects ARGB1555 + translucent list. The first load of a path wins.
+eng::Sprite asset_sprite(const char* path, bool alpha = false);
 }
