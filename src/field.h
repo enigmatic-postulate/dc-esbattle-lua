@@ -1,6 +1,8 @@
-// field.h - tile-based stage: map loading, free 8-direction hero movement with tile collision,
+// field.h - tile-based stage: map loading, free analog hero movement with tile collision,
 // entities (tile-stepping, optional patrol), touch -> encounter.
-// Slice tasks B1-B4. Everything is tick-based (60/s) and deterministic.
+// Slice tasks B1-B4. Everything is tick-based (60/s) and deterministic (integer math only).
+// Drawing lives in field3d.cpp (3D slice): the map is a logic grid that the 3D view lays out
+// as a ground plane, 1 tile = 1 world unit.
 #pragma once
 #include "common.h"
 #include "chars.h"
@@ -11,8 +13,16 @@ const int TILE_PX         = 32;   // 16x16 art drawn at 2x
 const int MAX_MAP_W       = 64, MAX_MAP_H = 64;
 const int MAX_ENTITIES    = 16;
 const int SUBPX           = 16;   // hero positions are integers in 1/16 px (deterministic, no floats)
-const int HERO_SPEED      = 32;   // 2 px/tick (= 1 tile per 16 ticks) when moving straight
-const int HERO_SPEED_DIAG = 23;   // per axis on diagonals: 23*sqrt(2) = 32.5 ~ same overall speed
+// Hero speed at full tilt, in 1/256 of a sub-pixel per tick. 14 subpx/tick = 0.875 px/tick
+// = 1.64 tiles/s (~90 px/s on screen with the 3D camera; the 2D build used 32 = 2 px/tick =
+// 3.75 tiles/s). Bounded by the walk clip: at the Knight's 0.8 scale one cycle covers 0.61
+// tiles, so full speed wants 2.7x playback; field3d.cpp caps the cadence at 2.3x. A run clip
+// is the way to raise this.
+const int HERO_SPEED_Q8 = 14 * 256;
+// Analog stick (-128..127): radial dead zone, then a linear ramp to full speed at STICK_FULL.
+// The d-pad is treated as a full-tilt stick (8 directions, same speed on diagonals).
+const int STICK_DEAD = 24;
+const int STICK_FULL = 100;
 // Hero "feet" hitbox and entity body box, in px relative to the 32x32 sprite cell's top-left.
 const int HERO_BOX_X0 = 8, HERO_BOX_X1 = 24, HERO_BOX_Y0 = 18, HERO_BOX_Y1 = 30;
 const int ENT_BOX_X0  = 4, ENT_BOX_X1  = 28, ENT_BOX_Y0  = 10, ENT_BOX_Y1  = 30;
@@ -25,9 +35,11 @@ enum class EntityKind : uint8_t { Enemy, Npc };
 
 struct Hero {
     int  x, y;        // sprite cell top-left, in 1/16 px (world space)
-    Dir  dir;
+    Dir  dir;         // 4-way facing (kept for traces/battle); the 3D view faces (vx, vy)
     bool moving;      // moved this tick
-    int  walk_sub;    // distance walked (1/16 px), drives the walk cycle
+    int  walk_sub;    // distance walked (1/16 px, Manhattan)
+    int  vx, vy;      // requested velocity this tick, 1/256 subpx (0 when no input)
+    int  fx, fy;      // fractional remainders of the motion, 1/256 subpx
 };
 
 struct Walker {       // tile-stepping walker (entities)
@@ -61,16 +73,16 @@ struct FieldState {
     Dir     spawn_dir;
     Hero    hero;
     FixedVec<Entity, MAX_ENTITIES> ents;
-    int     cam_x, cam_y;
+    int     cam_x, cam_y;      // legacy 2D camera window (px); kept for traces / invariant F4
     int     ticks;
     int     contact;      // entity index touched this tick (-1 = none); consumed by field_take_contact()
 };
 
 bool field_load(const char* path);          // parse a map file; false on error (reported via dbg_print)
 void field_reset();                         // hero at spawn, every entity alive at home
-void field_update();                        // one tick; reads input_held()
-void field_draw(int hero_hp, int hero_hp_max);
+void field_update();                        // one tick; reads input_held() / input_stick()
 int  field_take_contact();                  // touched entity index (once), or -1
+void field_entity_pixel(int i, int* px, int* py);   // entity cell top-left in px (interpolated step)
 void field_defeat(int entity_index);        // removes the entity for this session
 const FieldState& field_state();
 bool tile_walkable(uint8_t t);

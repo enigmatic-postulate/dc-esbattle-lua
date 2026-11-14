@@ -31,8 +31,8 @@ entity guard npc guard 10 16 down guard_duel
 | `~` | water (animated) | no |
 
 * The loader rejects bad files with a line number: unknown tile char, wrong row width, spawn or entity on a blocking tile, unknown encounter. The message goes to the serial log, and the game shows **MAP LOAD ERROR**.
-* 32 px tiles: a 640×480 screen shows 20×15. Maps larger than that scroll, and the camera clamps at the edges.
-* Movement is free, in 8 directions (2 px/tick). The hero collides with a 16×12 "feet" box (`HERO_BOX_*` in `src/field.h`), so 1-tile corridors are easy to walk, and he slides along walls. Entities block with a 24×20 body box; touching one starts its encounter.
+* The field is drawn in 3D (`src/field3d.cpp`, see §8): each tile is a 1×1 unit quad of the ground plane, textured with its `tiles.png` cell. The logic still works in 32 px tiles (1/16 px positions).
+* Movement is free and analog (stick, or the d-pad as a full-tilt stick): up to 14 sub-px/tick (0.875 px/tick), the same in every direction. The hero collides with a 16×12 "feet" box (`HERO_BOX_*` in `src/field.h`), so 1-tile corridors are easy to walk, and he slides along walls. Entities block with a 24×20 body box; touching one starts its encounter.
 * After editing the test map, re-check the collision sweep `field_walk` (its route is written for this map).
 
 ## 2. Add an enemy or NPC to a map
@@ -93,13 +93,66 @@ All placeholder art is defined as text pixel grids in `tools/make_assets.py`, 16
 | `python3 tests/check_invariants.py <trace>` | field rules on any trace (e.g. long fuzz runs) |
 | `python3 harness/gen_inputs.py field_fuzz ms60 <seed> 6000 x.in` | new random field session |
 
-Input scripts are one line per 60 Hz tick: `<dt> <buttons-hex>` (dt is ignored). Bits: up 1, down 2, left 4, right 8, A 16, B 32, Y 64, Start 128; combine bits for diagonals (up+right = 09). Walking straight covers one tile per 16 ticks.
+Input scripts are one line per 60 Hz tick: `<dt> <buttons-hex> [<stick-x> <stick-y>]` (dt is ignored; the stick columns are optional, -128..127, + = right/down). Bits: up 1, down 2, left 4, right 8, A 16, B 32, Y 64, Start 128; combine bits for diagonals (up+right = 09). Walking straight at full tilt covers one tile per ~37 ticks.
+
+The 3D slice adds `tests/slice3d/run.sh` (see `docs/SLICE_3D_1.md` §6): runtime vs reference, validator cross-check, sanitizer fuzz, movement invariants, float == double, battle traces vs a baseline (`BASELINE=<dir>`), and SH4 runs under qemu (`SH4=1`).
 
 **Battle controls.** Command ring: ◀▶ choose, A select, Y jumps to Guard. Attack → pick a target (◀▶, A), B back. Fire → confirm step with every enemy marked (A cast), B back. Guard casts immediately.
+
+## 8. 3D models and the 3D field
+
+**Models** are `.dmf` files in `romdisk/models/` (format: `docs/DMF.md`). Rebuild all of them with `tools/dmf/build_models.sh`:
+* The hero needs Blender's Python: `python3.11 -m venv .venv && .venv/bin/pip install bpy==4.2.0 numpy pillow`, then `BPY=.venv/bin/python tools/dmf/build_models.sh`.
+* The output is byte-for-byte reproducible.
+
+**Another KayKit character** (all share `Rig_Medium`, so the walk and idle come along):
+```sh
+.venv/bin/python tools/dmf/kaykit_to_dmf.py --character ART/Barbarian.fbx --texture ART/barbarian_texture.png \
+    --anim Walking.fbx --occlude Head=BearHat --tris 1500 --arm-spread 20 --out romdisk/models/barbarian.dmf \
+    --report assets_src/barbarian_report.json
+python3 tools/dmf/preview_dmf.py romdisk/models/barbarian.dmf /tmp/b.png --anim walk --frames 8
+```
+
+Converter options:
+* `--drop`: removes parts.
+* `--occlude PART=COVER`: deletes faces of PART that COVER hides (do this for anything under a hat or helmet, or it pokes through after decimation).
+* `--part-weight NAME=W`: shifts the triangle budget between parts.
+* `--double-sided`: parts drawn without culling (capes).
+* `--tex-size`.
+
+Check the report for triangles per part and UVs near swatch edges.
+
+**Drawing a model** (see `field3d.cpp`):
+1. `dmf::load` once.
+2. Materials: `eng::material_create(model.texture, eng::MAT_BILINEAR)`.
+3. Per frame:
+   * `dmf::pose_sample` (and `pose_blend`);
+   * `dmf::pose_skin`;
+   * `r3d::draw_model(cam, light, model, mats, world, skin)`.
+
+Static models pass `nullptr` for the skin.
+
+**Budget per model:**
+* Keep heroes around 1500 triangles. The Knight costs ~320k SH4 instructions per frame (transform, lighting, strips).
+* Keep one 64×64 16-bit texture per model (8 KiB VRAM).
+* Up to 4096 vertices and 32 bones.
+
+**Tuning the view** without rebuilding (host): `--tune name=value` on `battle_trace_f32`. Names are in `TUNES[]` in `src/field3d.cpp`: `cam_pitch`, `cam_dist`, `cam_fov`, `cam_look_h`, `hero_scale`, `walk_max_rate`, `shadow_alpha`, …. Render the result with `--dump` (below). Make the chosen values the defaults in `field3d.cpp`.
+
+**Which entity gets which model:** slime sheets use the cube, everything else the sphere (`field3d_draw`).
 
 ## Preview without hardware
 
 ```sh
 ./build/battle_trace_f64 tests/inputs/field_full.in /tmp/full.trace        # full trace (with draw calls)
-python3 tools/render_trace.py /tmp/full.trace 60 romdisk /tmp/frame60.png   # approximate PVR render of tick 60
+python3 tools/render_trace.py /tmp/full.trace 60 romdisk /tmp/frame60.png   # approximate PVR render of tick 60 (2D)
 ```
+
+3D field frames (vertices are too bulky for traces, so selected ticks are dumped):
+
+```sh
+./build/battle_trace_f32 tests/inputs/field_full.in /tmp/t.trace --dump /tmp/frames --dump-frames 60,120
+python3 tools/render_frame.py /tmp/frames/frame_00120.txt romdisk /tmp/frame120.png
+```
+
+`--view` adds a `V` line per field tick (camera, hero yaw, walk blend, triangles, vertices, arena use).

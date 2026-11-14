@@ -1,8 +1,6 @@
 // field.cpp - see field.h
 #include "field.h"
-#include "assets.h"
 #include "encounters.h"
-#include "font.h"
 #include "input.h"
 #include <stdio.h>
 #include <string.h>
@@ -10,7 +8,6 @@
 namespace bt {
 
 static FieldState  g_f;
-static eng::Sprite g_tiles = 0;
 static const int   DX[4] = { 0, 0, -1, 1 };   // DIR_DOWN, DIR_UP, DIR_LEFT, DIR_RIGHT
 static const int   DY[4] = { 1, -1, 0, 0 };
 
@@ -52,7 +49,6 @@ static void walker_place(Walker& w, int x, int y, Dir d, int step_len) {
 bool field_load(const char* path) {
     static char buf[8192];
     if (eng::file_read(path, buf, sizeof buf) < 0) { report(0, "cannot read", path); return false; }
-    if (!g_tiles) g_tiles = asset_sprite("/rd/tiles.png", false);
 
     g_f = FieldState();
     g_f.ents.clear();
@@ -170,6 +166,7 @@ void field_reset() {
     Hero& h = g_f.hero;
     h.x = g_f.spawn_x * TILE_PX * SUBPX; h.y = g_f.spawn_y * TILE_PX * SUBPX;
     h.dir = g_f.spawn_dir; h.moving = false; h.walk_sub = 0;
+    h.vx = h.vy = 0; h.fx = h.fy = 0;
     for (Entity& e : g_f.ents) {
         walker_place(e.w, e.home_x, e.home_y, e.home_dir, NPC_STEP_TICKS);
         e.alive = true; e.ppos = 0; e.psign = 1; e.pwait = PATROL_WAIT;
@@ -216,20 +213,44 @@ static bool hero_move_axis(int dx, int dy) {
     return true;
 }
 
+// Integer square root (floor), for the stick magnitude. Deterministic on every platform.
+static int isqrt(int n) {
+    if (n <= 0) return 0;
+    int r = 0, bit = 1 << 30;
+    while (bit > n) bit >>= 2;
+    while (bit) {
+        if (n >= r + bit) { n -= r + bit; r = (r >> 1) + bit; } else { r >>= 1; }
+        bit >>= 2;
+    }
+    return r;
+}
+
 static void hero_update() {
     Hero& h = g_f.hero;
     h.moving = false;
-    int dx = (input_held(eng::KEY_RIGHT) ? 1 : 0) - (input_held(eng::KEY_LEFT) ? 1 : 0);
-    int dy = (input_held(eng::KEY_DOWN) ? 1 : 0) - (input_held(eng::KEY_UP) ? 1 : 0);
-    if (dx == 0 && dy == 0) return;
-    // Facing: keep the current one while its direction is still held (no flicker on diagonals),
-    // otherwise face horizontally on diagonals, else the single held direction.
+    h.vx = h.vy = 0;
+    int ax = input_stick(eng::AXIS_X), ay = input_stick(eng::AXIS_Y);
+    if (ax * ax + ay * ay <= STICK_DEAD * STICK_DEAD) {          // stick at rest: d-pad = full tilt
+        ax = ((input_held(eng::KEY_RIGHT) ? 1 : 0) - (input_held(eng::KEY_LEFT) ? 1 : 0)) * STICK_FULL;
+        ay = ((input_held(eng::KEY_DOWN) ? 1 : 0) - (input_held(eng::KEY_UP) ? 1 : 0)) * STICK_FULL;
+    }
+    const int mag = isqrt(ax * ax + ay * ay);                   // 0 (no input) or > STICK_DEAD
+    if (mag <= STICK_DEAD) { h.fx = h.fy = 0; return; }
+    const int tilt = (mag < STICK_FULL ? mag : STICK_FULL) - STICK_DEAD;
+    const int spd = HERO_SPEED_Q8 * tilt / (STICK_FULL - STICK_DEAD);
+    h.vx = ax * spd / mag;
+    h.vy = ay * spd / mag;
+    // 4-way facing: keep the current one while the stick still points that way (no flicker
+    // on diagonals), otherwise face horizontally on diagonals, else vertically.
+    const int dx = (h.vx * 3 > spd) - (h.vx * 3 < -spd), dy = (h.vy * 3 > spd) - (h.vy * 3 < -spd);
     bool keep = (h.dir == DIR_LEFT && dx < 0) || (h.dir == DIR_RIGHT && dx > 0) ||
                 (h.dir == DIR_UP && dy < 0) || (h.dir == DIR_DOWN && dy > 0);
-    if (!keep) h.dir = dx ? (dx < 0 ? DIR_LEFT : DIR_RIGHT) : (dy < 0 ? DIR_UP : DIR_DOWN);
-    const int spd = (dx && dy) ? HERO_SPEED_DIAG : HERO_SPEED;
-    if (dx && !hero_move_axis(dx * spd, 0)) return;   // x then y: sliding along walls
-    if (dy) hero_move_axis(0, dy * spd);
+    if (!keep && (dx || dy)) h.dir = dx ? (dx < 0 ? DIR_LEFT : DIR_RIGHT) : (dy < 0 ? DIR_UP : DIR_DOWN);
+    h.fx += h.vx; h.fy += h.vy;                                  // remainders stay in [0, 256)
+    const int sx = floordiv(h.fx, 256), sy = floordiv(h.fy, 256);
+    h.fx -= sx * 256; h.fy -= sy * 256;
+    if (sx && !hero_move_axis(sx, 0)) return;                    // x then y: sliding along walls
+    if (sy) hero_move_axis(0, sy);
 }
 
 static void entity_update(int i) {
@@ -272,75 +293,9 @@ int field_take_contact() { int c = g_f.contact; g_f.contact = -1; return c; }
 
 void field_defeat(int i) { if (i >= 0 && i < g_f.ents.size()) g_f.ents[i].alive = false; }
 
-// ---------------------------------------------------------------------------- drawing
-static int hero_frame(const Hero& h) {
-    static const int CYCLE[4] = { FRAME_WALK_A, FRAME_STAND, FRAME_WALK_B, FRAME_STAND };   // 16 px each
-    return h.moving ? CYCLE[(h.walk_sub / (16 * SUBPX)) % 4] : (int)FRAME_STAND;
-}
-
-static int walk_frame(const Walker& w) {
-    if (!w.moving || w.step >= w.step_len / 2) return FRAME_STAND;
-    return w.phase ? FRAME_WALK_B : FRAME_WALK_A;
-}
-
-struct DrawItem { int y; int kind; int index; };   // kind 0 = hero, 1 = entity
-
-void field_draw(int hero_hp, int hero_hp_max) {
-    // Tiles (opaque list), only the visible window.
-    const float CELL = 0.25f;
-    int x0 = maxv(0, g_f.cam_x / TILE_PX), y0 = maxv(0, g_f.cam_y / TILE_PX);
-    int x1 = minv(g_f.w, (g_f.cam_x + 640 + TILE_PX - 1) / TILE_PX);
-    int y1 = minv(g_f.h, (g_f.cam_y + 480 + TILE_PX - 1) / TILE_PX);
-    const bool water_alt = (g_f.ticks / 30) % 2 == 1;
-    for (int y = y0; y < y1; ++y)
-        for (int x = x0; x < x1; ++x) {
-            int t = tile_at(x, y);
-            if (t == TILE_WATER && water_alt) t = TILE_WATER2;
-            float u0 = (float)(t % 4) * CELL, v0 = (float)(t / 4) * CELL;
-            eng::sprite_draw_uv(g_tiles, (float)(x * TILE_PX - g_f.cam_x + TILE_PX / 2),
-                                (float)(y * TILE_PX - g_f.cam_y + TILE_PX / 2), (float)TILE_PX, (float)TILE_PX,
-                                0.0f, u0, v0, u0 + CELL, v0 + CELL, 0);
-        }
-
-    // Characters, back to front by feet position.
-    DrawItem items[MAX_ENTITIES + 1];
-    int n = 0, px, py;
-    items[n++] = DrawItem{ g_f.hero.y / SUBPX, 0, 0 };
-    for (int i = 0; i < g_f.ents.size(); ++i) {
-        if (!g_f.ents[i].alive) continue;
-        walker_pixel(g_f.ents[i].w, &px, &py);
-        items[n++] = DrawItem{ py, 1, i };
-    }
-    for (int i = 1; i < n; ++i) {                        // stable insertion sort by y
-        DrawItem v = items[i]; int j = i - 1;
-        while (j >= 0 && items[j].y > v.y) { items[j + 1] = items[j]; --j; }
-        items[j + 1] = v;
-    }
-    for (int k = 0; k < n; ++k) {
-        const DrawItem& it = items[k];
-        if (it.kind == 0) {
-            const Hero& h = g_f.hero;
-            char_draw(SHEET_HERO, h.dir, hero_frame(h), (real)(h.x / SUBPX - g_f.cam_x + TILE_PX / 2),
-                      (real)(h.y / SUBPX - g_f.cam_y + TILE_PX / 2), TILE_PX);
-        } else {
-            const Walker& w = g_f.ents[it.index].w;
-            walker_pixel(w, &px, &py);
-            real cx = (real)(px - g_f.cam_x + TILE_PX / 2), cy = (real)(py - g_f.cam_y + TILE_PX / 2);
-            if (cx < -32 || cx > 672 || cy < -32 || cy > 512) continue;
-            const Entity& e = g_f.ents[it.index];
-            int frame;
-            if (e.sheet == SHEET_SLIME) frame = ((g_f.ticks + it.index * 11) / 24) % 2;          // squash idle
-            else if (w.moving) frame = walk_frame(w);
-            else frame = (w.dir == DIR_DOWN && (g_f.ticks + it.index * 37) % 150 < 8) ? FRAME_EXTRA : FRAME_STAND;   // blink
-            char_draw(e.sheet, w.dir, frame, cx, cy, TILE_PX);
-        }
-    }
-
-    // HUD: hero HP (top right).
-    char hud[24];
-    snprintf(hud, sizeof hud, "HP %d/%d", hero_hp, hero_hp_max);
-    eng::gfx_rect_tr(500, 12, 128, 28, 0xA0000000, 7.0f);
-    font_draw(510, 18, hud, 2, hero_hp * 4 > hero_hp_max ? 0xFFF4F4F4 : 0xFFEF7D57, true, 7.5f);
+void field_entity_pixel(int i, int* px, int* py) {
+    if (i < 0 || i >= g_f.ents.size()) { *px = *py = 0; return; }
+    walker_pixel(g_f.ents[i].w, px, py);
 }
 
 } // namespace bt

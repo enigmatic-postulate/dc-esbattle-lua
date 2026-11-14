@@ -17,6 +17,13 @@ void sprite_draw_uv(Sprite, float, float, float, float, float, float, float, flo
 void gfx_rect(float, float, float, float, uint32_t, float) { g_calls = g_calls + 1; }
 void gfx_rect_tr(float, float, float, float, uint32_t, float) { g_calls = g_calls + 1; }
 bool input_down(Key k) { return (g_btn >> k) & 1; }
+int  input_axis(Axis) { return 0; }
+Sprite texture_create(const uint16_t*, int, int, int) { static int n = 100; return ++n; }
+Material material_create(Sprite, int) { static int n = 0; return ++n; }
+static Vert3 g_vtx[12288];
+Vert3* vtx_begin(int max) { return max <= 12288 ? g_vtx : nullptr; }
+void vtx_end(Material, int used) { g_calls = g_calls + (uint32_t)used; }
+void set_clear_color(uint32_t) {}
 float random01() { g_rng = g_rng * 1664525u + 1013904223u; return (float)(g_rng >> 8) / 16777216.0f; }
 void dbg_print(const char* s) { fprintf(stderr, "%s\n", s); }
 int file_read(const char* path, char* buf, int cap) {

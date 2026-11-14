@@ -1,0 +1,76 @@
+{
+ "character": "Knight.fbx",
+ "dropped": [
+  "Knight_HelmetVisor"
+ ],
+ "source_tris": 4925,
+ "tris": 1490,
+ "parts": {
+  "Knight_ArmLeft": [
+   622,
+   144
+  ],
+  "Knight_ArmRight": [
+   622,
+   144
+  ],
+  "Knight_Body": [
+   1288,
+   401
+  ],
+  "Knight_Cape": [
+   84,
+   84
+  ],
+  "Knight_Head": [
+   635,
+   297
+  ],
+  "Knight_Helmet": [
+   418,
+   128
+  ],
+  "Knight_LegLeft": [
+   628,
+   146
+  ],
+  "Knight_LegRight": [
+   628,
+   146
+  ]
+ },
+ "double_sided": [
+  "Knight_Cape"
+ ],
+ "hidden_faces_removed": {
+  "Knight_Head": 279
+ },
+ "verts": 1611,
+ "groups": 27,
+ "bones": 23,
+ "texture": {
+  "source": 1024,
+  "size": 64,
+  "uvs_within_half_texel_of_swatch_edge": 3
+ },
+ "anims": {
+  "walk": {
+   "frames": 23,
+   "fps": 24.0,
+   "ground_speed": 0.7969917675442048,
+   "hip_scale": 0.38903267290603516,
+   "removed_root_motion": [
+    -0.0015015783570354047,
+    -0.008321796591246322,
+    1.561574539241221
+   ]
+  },
+  "idle": {
+   "frames": 40,
+   "fps": 20.0
+  }
+ },
+ "file_bytes": 80960,
+ "strips": 536,
+ "emitted_verts": 2562
+}

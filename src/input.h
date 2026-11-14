@@ -8,4 +8,5 @@ void input_reset();                 // forget history (no edges on the next tick
 bool input_held(eng::Key k);
 bool input_pressed(eng::Key k);     // went down this tick
 bool input_released(eng::Key k);    // went up this tick
+int  input_stick(eng::Axis a);      // analog stick this tick, -128..127 (sampled with the buttons)
 }

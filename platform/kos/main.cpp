@@ -3,15 +3,23 @@
 // Derived from the original zip/main.cpp (PVR batching, rect queues, input overlay), with
 // the Lua VM removed. Implements src/engine.h and runs the game at a fixed 60 Hz tick.
 //
-// Rendering per frame:   OP list : opaque sprites (tiles) + OP rects (backdrops)
-//                        TR list : alpha sprites (characters, icons, font) + TR rects (bars,
-//                                  fx, banners, fades) + the debug input overlay
+// Rendering per frame:   OP list : 3D batches (field ground, models) + opaque sprites + OP rects
+//                        TR list : 3D batches (blob shadows) + alpha sprites (icons, font) +
+//                                  TR rects (bars, fx, banners, fades) + the debug input overlay
 // Depth: every sprite gets z = 1 + seq*1e-4 in call order (later = in front); rects carry
-// their own z; larger z is nearer (OP depth compare GREATER, TR autosorted).
+// their own z; larger z is nearer (OP depth compare GREATER, TR autosorted). 3D vertices carry
+// z = 1/w <= 2 (src/render3d.cpp), so they sit behind sprites/rects and in front of the
+// background plane (KOS zclip = 0.0001, read from pvr_allocate_buffers in this KOS build).
+//
+// 3D submission: the game writes pvr_vertex_t-shaped strips (eng::Vert3) into g_arena; each
+// batch goes out as one header + ONE pvr_prim() of the whole block (pvr_prim -> sq_fast_cpy of
+// size/32 blocks, no lock). Build with R3D_SAFE=1 to submit one vertex per pvr_prim() instead -
+// the exact pattern the 2D renderer has always used - if the bulk path is ever suspected.
 #include <kos.h>
 #include <png/png.h>
 #include <dc/video.h>
 #include <malloc.h>
+#include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
 #include <vector>
@@ -45,10 +53,46 @@ static int g_diag_frame = 0;
 struct Sprite {
     kos_img_t img;
     pvr_ptr_t tex;
-    bool alpha;                    // ARGB1555 in the TR list, else RGB565 in the OP list
+    bool alpha;                    // ARGB1555/4444 in the TR list, else RGB565 in the OP list
+    int pvr_fmt;                   // PVR_TXRFMT_* (without TWIDDLED)
     pvr_poly_hdr_t hdr_nearest;
     pvr_poly_hdr_t hdr_bilinear;
 };
+
+// --- 3D: eng::Vert3 must be byte-identical to pvr_vertex_t (it is submitted as-is) -------
+static_assert(sizeof(eng::Vert3) == sizeof(pvr_vertex_t), "Vert3 size");
+static_assert(offsetof(eng::Vert3, flags) == offsetof(pvr_vertex_t, flags), "Vert3 flags");
+static_assert(offsetof(eng::Vert3, x) == offsetof(pvr_vertex_t, x), "Vert3 x");
+static_assert(offsetof(eng::Vert3, z) == offsetof(pvr_vertex_t, z), "Vert3 z");
+static_assert(offsetof(eng::Vert3, u) == offsetof(pvr_vertex_t, u), "Vert3 u");
+static_assert(offsetof(eng::Vert3, argb) == offsetof(pvr_vertex_t, argb), "Vert3 argb");
+static_assert(offsetof(eng::Vert3, oargb) == offsetof(pvr_vertex_t, oargb), "Vert3 oargb");
+static_assert(eng::VERT == PVR_CMD_VERTEX && eng::VERT_EOL == PVR_CMD_VERTEX_EOL, "Vert3 commands");
+
+struct Material3 { pvr_poly_hdr_t hdr; pvr_list_t list; };
+static Material3 g_mats[64];
+static int g_nmats = 0;
+
+const int ARENA_VERTS = 8192;                       // 256 KiB; a field frame uses ~4k
+static pvr_vertex_t g_arena[ARENA_VERTS] __attribute__((aligned(32)));
+struct Batch3 { int mat, first, count; };
+static Batch3 g_batches3[256];
+static int g_nbatches3 = 0, g_arena_used = 0, g_arena_open = -1;
+static int g_arena_peak = 0, g_arena_drops = 0;     // DIAG report
+
+static void flush_3d(pvr_list_t list) {
+    for (int i = 0; i < g_nbatches3; ++i) {
+        const Batch3& b = g_batches3[i];
+        const Material3& m = g_mats[b.mat - 1];
+        if (m.list != list) continue;
+        pvr_prim(&m.hdr, sizeof(m.hdr));
+#if defined(R3D_SAFE)
+        for (int k = 0; k < b.count; ++k) pvr_prim(&g_arena[b.first + k], sizeof(pvr_vertex_t));
+#else
+        pvr_prim(&g_arena[b.first], (size_t)b.count * sizeof(pvr_vertex_t));
+#endif
+    }
+}
 
 static Sprite g_sprites[eng::MAX_SPRITES];
 static int g_sprite_count = 0;
@@ -104,7 +148,7 @@ static void flush_sprite_batches(bool alpha) {
 }
 
 // --- Input -----------------------------------------------------------------
-struct InputState { uint32 buttons; int joyx; int joyy; };
+struct InputState { uint32 buttons; int joyx; int joyy; };   // joyx/joyy: -128..127, + = right/down
 static InputState g_in = { 0, 0, 0 };   // KOS cont_state_t.buttons is active-high (1 = pressed)
 
 static void poll_input() {
@@ -192,7 +236,8 @@ Sprite sprite_load(const char* path, bool alpha) {
     g_vram_bytes += s->img.byte_count;
 
     const pvr_list_t list = alpha ? PVR_LIST_TR_POLY : PVR_LIST_OP_POLY;   // KOS 2.1: typed enum
-    const int fmt  = (alpha ? (int)PVR_TXRFMT_ARGB1555 : (int)PVR_TXRFMT_RGB565) | (int)PVR_TXRFMT_TWIDDLED;
+    s->pvr_fmt = alpha ? (int)PVR_TXRFMT_ARGB1555 : (int)PVR_TXRFMT_RGB565;
+    const int fmt  = s->pvr_fmt | (int)PVR_TXRFMT_TWIDDLED;
     pvr_poly_cxt_t cxt;
     pvr_poly_cxt_txr(&cxt, list, fmt, s->img.w, s->img.h, s->tex, PVR_FILTER_NONE);
     pvr_poly_compile(&s->hdr_nearest, &cxt);
@@ -217,6 +262,75 @@ void sprite_draw(Sprite handle, float x, float y, float w, float h, float a, int
     sprite_draw_uv(handle, x, y, w, h, a, 0.0f, 0.0f, 1.0f, 1.0f, filter);
 }
 
+// Memory texture (.dmf): same upload path as the PNGs (kos_img_t + pvr_txr_load_kimg twiddles it).
+Sprite texture_create(const uint16_t* texels, int w, int h, int fmt) {
+    DIAG("texture_create(%dx%d fmt %d) slot %d\n", w, h, fmt, g_sprite_count);
+    if (g_sprite_count >= MAX_SPRITES) { dbglog(DBG_ERROR, "sprite limit reached\n"); return 0; }
+    if (w < 8 || h < 8 || w > 1024 || h > 1024 || (w & (w - 1)) || (h & (h - 1)) || fmt < 1 || fmt > 3) return 0;
+    ::Sprite* s = &g_sprites[g_sprite_count];
+    memset(&s->img, 0, sizeof(s->img));
+    s->img.data = (void*)texels;                 // lives in the .dmf arena for the whole session
+    s->img.w = (uint32_t)w;
+    s->img.h = (uint32_t)h;
+    s->img.fmt = fmt == 1 ? KOS_IMG_FMT_RGB565 : (fmt == 2 ? KOS_IMG_FMT_ARGB4444 : KOS_IMG_FMT_ARGB1555);
+    s->img.byte_count = (uint32_t)(w * h * 2);
+    s->alpha = fmt != 1;
+    s->pvr_fmt = fmt == 1 ? (int)PVR_TXRFMT_RGB565 : (fmt == 2 ? (int)PVR_TXRFMT_ARGB4444 : (int)PVR_TXRFMT_ARGB1555);
+    s->tex = pvr_mem_malloc(s->img.byte_count);
+    if (!s->tex) { dbglog(DBG_ERROR, "pvr_mem_malloc failed\n"); return 0; }
+    pvr_txr_load_kimg(&s->img, s->tex, PVR_TXRLOAD_16BPP);
+    g_vram_bytes += s->img.byte_count;
+    const pvr_list_t list = s->alpha ? PVR_LIST_TR_POLY : PVR_LIST_OP_POLY;
+    pvr_poly_cxt_t cxt;
+    pvr_poly_cxt_txr(&cxt, list, s->pvr_fmt | (int)PVR_TXRFMT_TWIDDLED, w, h, s->tex, PVR_FILTER_NONE);
+    pvr_poly_compile(&s->hdr_nearest, &cxt);
+    pvr_poly_cxt_txr(&cxt, list, s->pvr_fmt | (int)PVR_TXRFMT_TWIDDLED, w, h, s->tex, PVR_FILTER_BILINEAR);
+    pvr_poly_compile(&s->hdr_bilinear, &cxt);
+    DIAG("  texture %d ready, VRAM textures total %lu KiB\n", g_sprite_count + 1, (unsigned long)(g_vram_bytes / 1024));
+    return ++g_sprite_count;
+}
+
+Material material_create(Sprite tex, int flags) {
+    if (g_nmats >= (int)(sizeof(g_mats) / sizeof(g_mats[0]))) { dbglog(DBG_ERROR, "material limit reached\n"); return 0; }
+    if (tex < 0 || tex > g_sprite_count) return 0;
+    Material3& m = g_mats[g_nmats];
+    m.list = (flags & MAT_TRANSLUCENT) ? PVR_LIST_TR_POLY : PVR_LIST_OP_POLY;
+    pvr_poly_cxt_t cxt;
+    if (tex) {
+        const ::Sprite& s = g_sprites[tex - 1];
+        pvr_poly_cxt_txr(&cxt, m.list, s.pvr_fmt | (int)PVR_TXRFMT_TWIDDLED, (int)s.img.w, (int)s.img.h, s.tex,
+                         (flags & MAT_BILINEAR) ? PVR_FILTER_BILINEAR : PVR_FILTER_NONE);
+    } else {
+        pvr_poly_cxt_col(&cxt, m.list);
+    }
+    // Front faces are counter-clockwise on screen (render3d.h): cull the clockwise ones.
+    cxt.gen.culling = (flags & MAT_CULL) ? PVR_CULLING_CW : PVR_CULLING_NONE;
+    pvr_poly_compile(&m.hdr, &cxt);
+    DIAG("material %d: tex %d flags %d list %d\n", g_nmats + 1, tex, flags, (int)m.list);
+    return ++g_nmats;
+}
+
+Vert3* vtx_begin(int max) {
+    if (g_arena_open >= 0 || max <= 0 || g_nbatches3 >= (int)(sizeof(g_batches3) / sizeof(g_batches3[0])) ||
+        g_arena_used + max > ARENA_VERTS) { ++g_arena_drops; return nullptr; }
+    g_arena_open = g_arena_used;
+    return reinterpret_cast<Vert3*>(&g_arena[g_arena_used]);
+}
+
+void vtx_end(Material m, int used) {
+    if (g_arena_open < 0) return;
+    const int first = g_arena_open;
+    g_arena_open = -1;
+    if (used <= 0 || m < 1 || m > g_nmats) return;
+    g_arena_used = first + used;
+    if (g_arena_used > g_arena_peak) g_arena_peak = g_arena_used;
+    g_batches3[g_nbatches3++] = Batch3{ m, first, used };
+}
+
+void set_clear_color(uint32_t rgb) {
+    pvr_set_bg_color((float)((rgb >> 16) & 255) / 255.0f, (float)((rgb >> 8) & 255) / 255.0f, (float)(rgb & 255) / 255.0f);
+}
+
 void gfx_rect(float x, float y, float w, float h, uint32_t argb, float z)    { rectq_push(PVR_LIST_OP_POLY, x, y, w, h, z, argb); }
 void gfx_rect_tr(float x, float y, float w, float h, uint32_t argb, float z) { rectq_push(PVR_LIST_TR_POLY, x, y, w, h, z, argb); }
 
@@ -233,6 +347,8 @@ bool input_down(Key k) {
     default:        return false;
     }
 }
+
+int input_axis(Axis a) { return a == AXIS_X ? g_in.joyx : (a == AXIS_Y ? g_in.joyy : 0); }
 
 // Same 24-bit LCG as the verified host build (platform/host/host_engine.cpp); no newlib rand().
 static uint32_t g_rng = 12345;
@@ -271,6 +387,9 @@ int main(int, char**) {
     check_file("/rd/hero.png");
     check_file("/rd/ui_icons.png");
     check_file("/rd/font.png");
+    check_file("/rd/models/knight.dmf");
+    check_file("/rd/models/cube.dmf");
+    check_file("/rd/models/sphere.dmf");
 
     eng::seed_random((uint32_t)timer_ms_gettime64());
 #if !defined(DIAG_SKIP_GAME)
@@ -312,6 +431,7 @@ int main(int, char**) {
         uint64 draw_start = timer_us_gettime64();
         pvr_scene_begin();
         g_seq = 0;
+        g_arena_used = 0; g_nbatches3 = 0; g_arena_open = -1;
 #if !defined(DIAG_SKIP_GAME) && !defined(DIAG_SKIP_DRAW)
         bt::game_draw();                          // queues sprites + rects
 #endif
@@ -319,12 +439,14 @@ int main(int, char**) {
 
         DIAG_F("frame %d: OP list (rects queued=%d)\n", g_diag_frame, g_rect_qn);
         pvr_list_begin(PVR_LIST_OP_POLY);
+        flush_3d(PVR_LIST_OP_POLY);
         flush_sprite_batches(false);
         rect_flush_list(PVR_LIST_OP_POLY);
         pvr_list_finish();
 
         DIAG_F("frame %d: TR list\n", g_diag_frame);
         pvr_list_begin(PVR_LIST_TR_POLY);
+        flush_3d(PVR_LIST_TR_POLY);
         flush_sprite_batches(true);
         rect_flush_list(PVR_LIST_TR_POLY);
         pvr_list_finish();
@@ -342,6 +464,11 @@ int main(int, char**) {
             int heap_now = mallinfo().uordblks;
             DIAG("frames %d: worst CPU frame %lu us, frames over 16.7 ms: %lu, heap in use %d B (%+d since last report)\n",
                  g_diag_frame, (unsigned long)worst_us, (unsigned long)over_budget, heap_now, heap_now - heap_prev);
+            pvr_stats_t ps;
+            pvr_get_stats(&ps);
+            DIAG("  3D: arena peak %d/%d verts, drops %d; PVR vtx buffer peak %lu B, %.1f fps\n",
+                 g_arena_peak, ARENA_VERTS, g_arena_drops, (unsigned long)ps.vtx_buffer_used_max, (double)ps.frame_rate);
+            g_arena_peak = 0;
             heap_prev = heap_now;
             worst_us = 0;
         }

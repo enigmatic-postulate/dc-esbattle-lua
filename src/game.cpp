@@ -4,6 +4,7 @@
 #include "chars.h"
 #include "encounters.h"
 #include "field.h"
+#include "field3d.h"
 #include "font.h"
 #include "icons.h"
 #include "input.h"
@@ -46,6 +47,8 @@ bool game_init(const char* map_path) {
     g_party = party_default();
     g_battle_test = false;
     if (!field_load(map_path)) { g_mode = GameMode::Error; return false; }
+    field3d_init();
+    field3d_reset();
     g_mode = GameMode::Field;
     g_fade_in = T_FADE_IN;
     return true;
@@ -66,13 +69,15 @@ void game_tick() {
     input_update();
     switch (g_mode) {
     case GameMode::Field: {
-        if (g_fade_in > 0) { --g_fade_in; break; }
+        if (g_fade_in > 0) { --g_fade_in; field3d_tick(); break; }
         field_update();
+        field3d_tick();                                  // cosmetic only (camera, facing, animation)
         int c = field_take_contact();
         if (c >= 0) { g_pending = c; g_trans = 0; g_mode = GameMode::ToBattle; }
         break;
     }
     case GameMode::ToBattle:
+        field3d_tick();                                  // keeps idling/settling under the fade
         if (++g_trans >= T_FADE_OUT) {
             const EncounterDef* enc = encounter_by_id(field_state().ents[g_pending].encounter);
             battle_begin(*enc, g_party);    // validated at map load
@@ -105,6 +110,7 @@ void game_tick() {
         if (g_over_ticks >= 30 && input_pressed(eng::KEY_FIRE)) {
             g_party = party_default();                   // full HP
             field_reset();                               // spawn + every entity restored
+            field3d_reset();
             g_mode = GameMode::Field;
             g_fade_in = T_FADE_IN;
         }
@@ -136,7 +142,7 @@ static void draw_error() {
 void game_draw() {
     switch (g_mode) {
     case GameMode::Field:
-    case GameMode::ToBattle: field_draw(g_party.hero_hp, g_party.hero_hp_max); break;
+    case GameMode::ToBattle: field3d_draw(g_party.hero_hp, g_party.hero_hp_max); break;
     case GameMode::Battle:
     case GameMode::ToField:  battle_draw(); break;
     case GameMode::GameOver: draw_game_over(); break;

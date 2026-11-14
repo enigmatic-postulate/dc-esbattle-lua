@@ -3,16 +3,22 @@
 #
 TARGET = battle.elf
 
-SRC_OBJS = src/assets.o src/battle.o src/chars.o src/combat.o src/encounters.o src/field.o \
-           src/font.o src/fx.o src/game.o src/hpbar.o src/icons.o src/input.o src/input_probe.o \
-           src/presentation.o src/skills.o src/status.o src/targeting.o src/turn_system.o src/ui.o
+SRC_OBJS = src/assets.o src/battle.o src/chars.o src/combat.o src/dmf.o src/encounters.o src/field.o \
+           src/field3d.o src/font.o src/fx.o src/game.o src/hpbar.o src/icons.o src/input.o \
+           src/input_probe.o src/presentation.o src/render3d.o src/skills.o src/status.o \
+           src/targeting.o src/turn_system.o src/ui.o
 OBJS = platform/kos/main.o $(SRC_OBJS) romdisk.o
 
-# romdisk/ now only needs the PNGs (no .lua files)
+# romdisk/: PNGs, maps/ and models/*.dmf (rebuild models with tools/dmf/build_models.sh)
 KOS_ROMDISK_DIR = romdisk
 
 KOS_CFLAGS   += -I$(KOS_PORTS)/include
 KOS_LIBS     += -lpng -lz
+
+# 3D triage: make R3D_SAFE=1 submits 3D strips one vertex per pvr_prim() (see platform/kos/main.cpp)
+ifdef R3D_SAFE
+KOS_CFLAGS += -DR3D_SAFE=1
+endif
 
 # Crash triage: make DIAG=1 [DIAG_SKIP=game|update|draw]   (see platform/kos/main.cpp)
 ifdef DIAG
