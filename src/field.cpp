@@ -8,6 +8,7 @@
 namespace bt {
 
 static FieldState  g_f;
+static FieldState  s_empty;   // pristine state for field_load (file scope: no function-local static guard)
 static const int   DX[4] = { 0, 0, -1, 1 };   // DIR_DOWN, DIR_UP, DIR_LEFT, DIR_RIGHT
 static const int   DY[4] = { 1, -1, 0, 0 };
 
@@ -39,19 +40,62 @@ static void report(int line, const char* msg, const char* detail) {
     eng::dbg_print(buf);
 }
 
+// Splits s at spaces/tabs into at most max tokens of < 16 chars. Returns the token count, or
+// -1 if there are more than max tokens or one is too long.
+static int split_tokens(const char* s, char (*tok)[16], int max) {
+    int n = 0;
+    for (;;) {
+        while (*s == ' ' || *s == '\t') ++s;
+        if (!*s) return n;
+        if (n == max) return -1;
+        int len = 0;
+        while (*s && *s != ' ' && *s != '\t') {
+            if (len == 15) return -1;
+            tok[n][len++] = *s++;
+        }
+        tok[n++][len] = '\0';
+    }
+}
+
+// [-]digits[.digits] -> float, exactly for the values maps use (halves, whole degrees).
+static bool parse_decimal(const char* s, float* out) {
+    bool neg = false;
+    if (*s == '-' || *s == '+') neg = *s++ == '-';
+    long whole = 0, frac = 0, scale = 1;
+    int digits = 0;
+    for (; *s >= '0' && *s <= '9'; ++s, ++digits) { if (whole > 100000) return false; whole = whole * 10 + (*s - '0'); }
+    if (*s == '.') {
+        for (++s; *s >= '0' && *s <= '9'; ++s, ++digits) { if (scale >= 1000000) return false; frac = frac * 10 + (*s - '0'); scale *= 10; }
+    }
+    if (*s || digits == 0) return false;
+    const float v = (float)whole + (float)frac / (float)scale;
+    *out = neg ? -v : v;
+    return true;
+}
+
+static bool parse_int(const char* s, int* out) {
+    float f;
+    if (!parse_decimal(s, &f) || f != (float)(int)f || strchr(s, '.')) return false;
+    *out = (int)f;
+    return true;
+}
+
 static uint8_t tile_at(int x, int y) { return g_f.tiles[y * g_f.w + x]; }
 static bool in_bounds(int x, int y) { return x >= 0 && y >= 0 && x < g_f.w && y < g_f.h; }
+bool cell_walkable(int x, int y) {
+    return in_bounds(x, y) && tile_walkable(tile_at(x, y)) && !g_f.solid[y * g_f.w + x];
+}
 
 static void walker_place(Walker& w, int x, int y, Dir d, int step_len) {
     w.tx = w.nx = x; w.ty = w.ny = y; w.moving = false; w.step = 0; w.step_len = step_len; w.dir = d; w.phase = false;
 }
 
 bool field_load(const char* path) {
-    static char buf[8192];
+    static char buf[16384];
     if (eng::file_read(path, buf, sizeof buf) < 0) { report(0, "cannot read", path); return false; }
 
-    g_f = FieldState();
-    g_f.ents.clear();
+    g_f = s_empty;                                      // no ~15 KB stack temporary
+    eng::boot_log("field_load: parsing");
     int rows_left = 0, row = 0, line_no = 0;
     bool have_map = false, have_spawn = false;
 
@@ -81,6 +125,35 @@ bool field_load(const char* path) {
                 report(line_no, "bad spawn", line); return false;
             }
             have_spawn = true;
+        } else if (strncmp(line, "prop ", 5) == 0) {
+            // prop <model> <x> <y> <rot_deg> [solid <w> <h>]   (footprint centred on x, y)
+            Prop p;
+            memset(&p, 0, sizeof p);
+            // Hand-parsed (no %f / strtod): tokens are whitespace separated, numbers are
+            // [-]digits[.digits], which is all the map format uses.
+            char tok[7][16];
+            const int got = split_tokens(line + 5, tok, 7);
+            int fw = 0, fh = 0;
+            if (got >= 4) {
+                snprintf(p.model, sizeof p.model, "%s", tok[0]);
+                if (!parse_decimal(tok[1], &p.x) || !parse_decimal(tok[2], &p.y) || !parse_decimal(tok[3], &p.rot_deg)) {
+                    report(line_no, "bad prop number", line); return false;
+                }
+            }
+            if (got == 7 && (!parse_int(tok[5], &fw) || !parse_int(tok[6], &fh))) { report(line_no, "bad prop footprint", line); return false; }
+            const char* extra = got == 7 ? tok[4] : "";
+            if (got != 4 && got != 7) { report(line_no, "bad prop", line); return false; }
+            if (!have_map || rows_left > 0) { report(line_no, "prop before the map block", line); return false; }
+            if (got == 7) {
+                if (strcmp(extra, "solid") != 0 || fw < 1 || fh < 1) { report(line_no, "bad prop footprint", line); return false; }
+                const float x0 = p.x - fw * 0.5f, y0 = p.y - fh * 0.5f;
+                if (x0 != (float)(int)x0 || y0 != (float)(int)y0) { report(line_no, "footprint not tile-aligned", line); return false; }
+                p.solid = true; p.tx = (int)x0; p.ty = (int)y0; p.tw = fw; p.th = fh;
+                if (!in_bounds(p.tx, p.ty) || !in_bounds(p.tx + fw - 1, p.ty + fh - 1)) { report(line_no, "footprint outside the map", line); return false; }
+                for (int y = p.ty; y < p.ty + fh; ++y)
+                    for (int x = p.tx; x < p.tx + fw; ++x) g_f.solid[y * g_f.w + x] = 1;
+            }
+            if (!g_f.props.push(p)) { report(line_no, "too many props", ""); return false; }
         } else if (strncmp(line, "entity ", 7) == 0) {
             Entity e;
             memset(&e, 0, sizeof e);
@@ -108,15 +181,18 @@ bool field_load(const char* path) {
         line = next;
     }
     if (!have_map || rows_left > 0) { report(line_no, "missing/short map block", ""); return false; }
-    if (!have_spawn || !in_bounds(g_f.spawn_x, g_f.spawn_y) || !tile_walkable(tile_at(g_f.spawn_x, g_f.spawn_y))) {
+    if (!have_spawn || !cell_walkable(g_f.spawn_x, g_f.spawn_y)) {
         report(line_no, "spawn missing or not walkable", ""); return false;
     }
     for (const Entity& e : g_f.ents) {
-        if (!in_bounds(e.home_x, e.home_y) || !tile_walkable(tile_at(e.home_x, e.home_y))) {
+        if (!cell_walkable(e.home_x, e.home_y)) {
             report(0, "entity not on a walkable tile:", e.id); return false;
         }
     }
     field_reset();
+    char msg[96];
+    snprintf(msg, sizeof msg, "field_load: ok, %dx%d, %d props, %d entities", g_f.w, g_f.h, g_f.props.size(), g_f.ents.size());
+    eng::boot_log(msg);
     return true;
 }
 
@@ -145,7 +221,7 @@ static bool box_blocked(const Box& b) {
     int c0 = floordiv(b.x0, T), c1 = floordiv(b.x1 - 1, T), r0 = floordiv(b.y0, T), r1 = floordiv(b.y1 - 1, T);
     for (int r = r0; r <= r1; ++r)
         for (int c = c0; c <= c1; ++c)
-            if (!in_bounds(c, r) || !tile_walkable(tile_at(c, r))) return true;
+            if (!cell_walkable(c, r)) return true;
     return false;
 }
 
@@ -272,7 +348,7 @@ static void entity_update(int i) {
     Dir d = sx > 0 ? DIR_RIGHT : sx < 0 ? DIR_LEFT : sy > 0 ? DIR_DOWN : DIR_UP;
     int tx = e.w.tx + sx, ty = e.w.ty + sy;
     e.w.dir = d;
-    bool blocked = !in_bounds(tx, ty) || !tile_walkable(tile_at(tx, ty));
+    bool blocked = !cell_walkable(tx, ty);
     for (int j = 0; j < g_f.ents.size() && !blocked; ++j) {
         const Entity& o = g_f.ents[j];
         if (j != i && o.alive && ((o.w.tx == tx && o.w.ty == ty) || (o.w.moving && o.w.nx == tx && o.w.ny == ty))) blocked = true;

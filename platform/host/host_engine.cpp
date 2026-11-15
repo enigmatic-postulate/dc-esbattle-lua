@@ -2,6 +2,7 @@
 // call as a text trace (format documented in harness/compare.py / tools/render_trace.py).
 #include "../../src/engine.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
 #include <vector>
@@ -26,9 +27,9 @@ static MemTex      g_memtex[eng::MAX_SPRITES];
 
 // ---- 3D: materials + per-frame vertex arena (same limits as the KOS backend)
 struct Mat { eng::Sprite tex; int flags; };
-static Mat g_mats[64];
+static Mat g_mats[128];
 static int g_nmats = 0;
-static const int ARENA_VERTS = 12288;
+static const int ARENA_VERTS = 16384;
 static eng::Vert3 g_arena[ARENA_VERTS];
 static int g_arena_used = 0, g_open = -1, g_batches = 0, g_batch_verts = 0;
 static uint32_t g_clear = 0;
@@ -84,7 +85,7 @@ Sprite texture_create(const uint16_t* texels, int w, int h, int fmt) {
 }
 
 Material material_create(Sprite tex, int flags) {
-    if (g_nmats >= 64 || tex < 0 || tex > g_nsprites) return 0;
+    if (g_nmats >= 128 || tex < 0 || tex > g_nsprites) return 0;
     g_mats[g_nmats] = Mat{ tex, flags };
     return ++g_nmats;
 }
@@ -149,6 +150,8 @@ float random01() {
 }
 
 void dbg_print(const char* s) { fprintf(g_trace, "D %s\n", s); }
+// Silent unless BOOT_LOG=1 (then stderr): shows the boot breadcrumb sequence the KOS build prints.
+void boot_log(const char* s) { static const char* e = getenv("BOOT_LOG"); if (e && *e == '1') fprintf(stderr, "[boot] %s\n", s); }
 
 int file_read(const char* path, char* buf, int cap) {
     char real_path[512];
@@ -161,6 +164,16 @@ int file_read(const char* path, char* buf, int cap) {
     if (n >= cap) return -1;
     buf[n] = '\0';
     return n;
+}
+
+bool file_exists(const char* path) {
+    char real_path[512];
+    if (strncmp(path, "/rd/", 4) == 0) snprintf(real_path, sizeof real_path, "%s/%s", g_romdisk, path + 4);
+    else snprintf(real_path, sizeof real_path, "%s", path);
+    FILE* f = fopen(real_path, "rb");
+    if (!f) return false;
+    fclose(f);
+    return true;
 }
 
 } // namespace eng

@@ -15,6 +15,16 @@ KOS_ROMDISK_DIR = romdisk
 KOS_CFLAGS   += -I$(KOS_PORTS)/include
 KOS_LIBS     += -lpng -lz
 
+# Header dependencies: every .o gets a .d listing the headers it includes, so editing a header
+# (e.g. src/field.h) rebuilds every object that uses it. Without this a plain `make` after an
+# update kept objects compiled against the old struct layouts (e.g. game.o vs FieldState).
+KOS_CFLAGS   += -MMD -MP
+
+# A/B triage: make PVR_DEFAULTS=1 uses pvr_init_defaults() (512 KiB TA vertex buffers)
+ifdef PVR_DEFAULTS
+KOS_CFLAGS += -DPVR_DEFAULTS=1
+endif
+
 # 3D triage: make R3D_SAFE=1 submits 3D strips one vertex per pvr_prim() (see platform/kos/main.cpp)
 ifdef R3D_SAFE
 KOS_CFLAGS += -DR3D_SAFE=1
@@ -41,7 +51,9 @@ include $(KOS_BASE)/Makefile.rules
 endif
 
 clean: rm-elf
-	-rm -f $(OBJS)
+	-rm -f $(OBJS) $(OBJS:.o=.d)
+
+-include $(SRC_OBJS:.o=.d) platform/kos/main.d
 
 rm-elf:
 	-rm -f $(TARGET) romdisk.*

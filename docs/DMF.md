@@ -1,4 +1,4 @@
-# DMF: Dreamcast Mesh Format (v1)
+# DMF: Dreamcast Mesh Format (v2)
 
 `.dmf` is the model format for the 3D field. It is designed around the SH4 + PowerVR2 and has no dependencies.
 
@@ -17,15 +17,42 @@
 | Proven texture path | 16-bit texels are stored linearly (RGB565 / ARGB4444 / ARGB1555). The runtime uploads them like the PNG sprites (`kos_img_t` + `pvr_txr_load_kimg`, which twiddles them) |
 | Small | Knight: 80.9 KB in total: vertices 51.6 KB, strips 6.2 KB, two clips 12.4 KB, skeleton 2.2 KB, texture 8.2 KB |
 
+## v2: materials and shared textures (VS2)
+
+A v2 file adds a **material table** (64 bytes per material, up to 8 per model), and each batch carries a material index in bits 8–15 of its flags. A material's texture is one of:
+
+| Value | Meaning |
+|---|---|
+| `""` | untextured (vertex colour only): window glass, trees, the skeletons' glowing eyes |
+| `"@"` | the texture embedded in the file (characters) |
+| `"/rd/tex/wood.png"` | a **shared texture** on the romdisk |
+
+Shared textures:
+* are loaded once per path and per alpha mode (`dmf::shared_texture`);
+* go through the same `png_to_img` path as the sprites;
+* are referenced by many models: the village's wood-trim texture is used by 7 models but is in VRAM once.
+
+Material flags:
+* `MAT_BILINEAR`;
+* `MAT_ALPHA`: ARGB1555 in the TR list. The vines use it.
+
+v1 files still load: they have one implicit material.
+
+**Conventions used by the field (not part of the file format):**
+* `<name>_r<yaw>.dmf` (e.g. `house_stone_r180.dmf`) is `<name>.dmf` with only the faces the game camera can see when the prop is placed at that yaw (`tools/dmf/build_village.py`, view culling). The field uses it for a `prop` at exactly that yaw, else `<name>.dmf`, which is culled for every yaw. Both look the same from the game camera. There are no distance LODs.
+* Static models get **per-strip bounding spheres** at load (`r3d::gfx_init`), so off-screen strips of a half-visible prop are neither transformed nor submitted.
+
 ## Layout (little-endian)
 
 ```
-Header (96 B)   "DMF1", version 1, flags (SKINNED | TEXTURED), file_size, counts,
-                bind-pose bounds, section offsets
+Header (96 B)   "DMF1", version 1|2, flags (SKINNED | TEXTURED), file_size, counts,
+                bind-pose bounds, section offsets (v2: + num_materials, off_materials)
+Materials (v2)  64 B each: char tex[48] ("" | "@" | "/rd/tex/x.png"), u16 flags
 Vertices        32 B each: f32 x,y,z  f32 u,v  s8 nx,ny,nz  u8 w0  u32 argb  pad[4]
 Skin groups     8 B each: u16 first, count; u8 bone0, bone1 (0xFF = none)
 Strips          u16 words: [len, i0 .. i(len-1)] repeated; standard strip parity
-Batches         16 B each: strip range + flags (DOUBLE_SIDED, TRANSLUCENT) + tri count
+Batches         16 B each: strip range + flags (DOUBLE_SIDED, TRANSLUCENT; v2: material in bits 8-15)
+                + tri count
 Bones           96 B each: name[16], s16 parent (< own index), bind t (3) + q (4) relative
                 to the parent, inverse bind matrix (3x4)
 Animations      32 B headers: name[16], frames, LOOP flag, translated bone, fps,
@@ -52,6 +79,7 @@ The C++ and Python validators accept exactly the same files; 6000 mutated files 
 | Tool | Use |
 |---|---|
 | `tools/dmf/kaykit_to_dmf.py` | KayKit character FBX (+ Mixamo clip) → `.dmf`. Runs in Blender's Python (`bpy`). It removes parts, deletes hidden faces (`--occlude`), decimates to a triangle budget with per-part weights, caps weights at 2 bones, retargets the clip, derives an idle, and downsamples the texture. Writes a JSON report |
+| `tools/dmf/build_village.py` | village props (v2, static, multi-material): assembles the Quaternius kit modules into prefabs, deletes invisible faces, decimates per part, writes LODs. Also writes the shared textures (`romdisk/tex/*.png`) and the ground atlas |
 | `tools/dmf/make_placeholders.py` | cube / sphere placeholder models (static, vertex colours) |
 | `tools/dmf/build_models.sh` | rebuilds every `romdisk/models/*.dmf`; byte-for-byte reproducible |
 | `tools/dmf/dmf.py a.dmf` | validates and prints a summary |
@@ -62,7 +90,7 @@ The C++ and Python validators accept exactly the same files; 6000 mutated files 
 * 65535 vertices per model.
 * 32 bones (`dmf::MAX_BONES`).
 * At most 2 bone influences per vertex.
-* One texture per model.
+* One embedded texture per model; up to 8 materials (v2).
 * Translation animated on one bone (the hips).
 * No per-vertex UV animation.
 * The runtime transforms up to 4096 vertices per model (`r3d::MAX_XV`).

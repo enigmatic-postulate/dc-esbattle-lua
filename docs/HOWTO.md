@@ -31,8 +31,8 @@ entity guard npc guard 10 16 down guard_duel
 | `~` | water (animated) | no |
 
 * The loader rejects bad files with a line number: unknown tile char, wrong row width, spawn or entity on a blocking tile, unknown encounter. The message goes to the serial log, and the game shows **MAP LOAD ERROR**.
-* The field is drawn in 3D (`src/field3d.cpp`, see §8): each tile is a 1×1 unit quad of the ground plane, textured with its `tiles.png` cell. The logic still works in 32 px tiles (1/16 px positions).
-* Movement is free and analog (stick, or the d-pad as a full-tilt stick): up to 14 sub-px/tick (0.875 px/tick), the same in every direction. The hero collides with a 16×12 "feet" box (`HERO_BOX_*` in `src/field.h`), so 1-tile corridors are easy to walk, and he slides along walls. Entities block with a 24×20 body box; touching one starts its encounter.
+* The field is drawn in 3D (`src/field3d.cpp`, see §8): each tile is a 1×1 unit quad of the ground plane, textured with its cell of `romdisk/tex/ground.png`. The logic still works in 32 px tiles (1/16 px positions). Maps can also place 3D props (§8).
+* Movement is free and analog (stick, or the d-pad as a full-tilt stick): up to 24 sub-px/tick (1.5 px/tick = 2.81 tiles/s), the same in every direction. The hero collides with a 16×12 "feet" box (`HERO_BOX_*` in `src/field.h`), so 1-tile corridors are easy to walk, and he slides along walls. Entities block with a 24×20 body box; touching one starts its encounter.
 * After editing the test map, re-check the collision sweep `field_walk` (its route is written for this map).
 
 ## 2. Add an enemy or NPC to a map
@@ -93,13 +93,57 @@ All placeholder art is defined as text pixel grids in `tools/make_assets.py`, 16
 | `python3 tests/check_invariants.py <trace>` | field rules on any trace (e.g. long fuzz runs) |
 | `python3 harness/gen_inputs.py field_fuzz ms60 <seed> 6000 x.in` | new random field session |
 
-Input scripts are one line per 60 Hz tick: `<dt> <buttons-hex> [<stick-x> <stick-y>]` (dt is ignored; the stick columns are optional, -128..127, + = right/down). Bits: up 1, down 2, left 4, right 8, A 16, B 32, Y 64, Start 128; combine bits for diagonals (up+right = 09). Walking straight at full tilt covers one tile per ~37 ticks.
+Input scripts are one line per 60 Hz tick: `<dt> <buttons-hex> [<stick-x> <stick-y>]` (dt is ignored; the stick columns are optional, -128..127, + = right/down). Bits: up 1, down 2, left 4, right 8, A 16, B 32, Y 64, Start 128; combine bits for diagonals (up+right = 09). Walking straight at full tilt covers one tile per ~21 ticks.
 
 The 3D slice adds `tests/slice3d/run.sh` (see `docs/SLICE_3D_1.md` §6): runtime vs reference, validator cross-check, sanitizer fuzz, movement invariants, float == double, battle traces vs a baseline (`BASELINE=<dir>`), and SH4 runs under qemu (`SH4=1`).
 
+**Building for the Dreamcast.** The makefile tracks header dependencies (`.d` files) since the VS2 fix-up. Run `make clean` once after updating from an older tree, and whenever you change a build flag (`DIAG=1`, `R3D_SAFE=1`, `PVR_DEFAULTS=1`). Every build prints `[boot]` breadcrumbs on the serial log; `TRIAGE.md` (last section) lists the expected sequence.
+
 **Battle controls.** Command ring: ◀▶ choose, A select, Y jumps to Guard. Attack → pick a target (◀▶, A), B back. Fire → confirm step with every enemy marked (A cast), B back. Guard casts immediately.
 
-## 8. 3D models and the 3D field
+## 8. The 3D village (field)
+
+The boot map is `romdisk/maps/village.txt`. `test_field.txt` still loads with `--map` on the host.
+
+Besides the tile rows, `spawn` and `entity` lines, a map can place 3D props:
+
+```
+prop <model> <x> <y> <rot_deg> [solid <w> <h>]
+prop house_stone   8.0  10.0    0 solid 4 4     # door faces south (rot 0); blocks a 4x4 footprint
+prop house_stone   9.0  19.0  180 solid 4 4     # door faces north
+prop crate         5.5  12.5    0 solid 1 1
+prop bush          5.4   9.2    0               # decoration: does not block
+```
+
+**Placement:**
+* `model` = `romdisk/models/<model>.dmf` (name up to 15 characters). If `<model>_r<yaw>.dmf` exists for the prop's yaw, it is used instead: the same model with the faces the camera can never see at that yaw removed. `tools/dmf/build_models.sh` makes them for every house yaw in `village.txt`. A house at a new yaw works without a rebuild; it is just more expensive until you rebuild.
+* Numbers are `[-]digits[.digits]`, e.g. `12`, `-0.5`, `21.25`. No exponents. Footprint sizes are whole numbers.
+* `(x, y)` is the model origin, in tiles. Fractional positions are fine.
+* A solid footprint is centred on `(x, y)` and must be tile-aligned. The loader checks this, and checks that the footprint stays inside the map.
+* Footprint tiles block exactly like walls. Spawn and entities may not stand on them.
+
+**Tiles that get 3D models automatically:**
+* `#` tiles: a fence segment is drawn between every pair of neighbouring `#` tiles, so runs and corners join up.
+* `T` tiles: a tree, with yaw and size varied per tile (deterministic).
+
+**Entities:**
+* `slime` enemies draw as the skeleton warrior; the `guard` draws as the skeleton mage.
+* Patrols move at 1 tile/s (`NPC_STEP_TICKS` = 60).
+
+**What the view does:**
+* Houses and trees that cover the hero on screen fade to `fade_alpha`: front faces only, TR list.
+* Static props have their lighting baked once per instance.
+* Enemies and the hero use lighting baked per yaw (`hero_dyn_light 1` lights the hero per vertex instead).
+* The village's frame cost depends on the geometry: see `docs/SLICE_3D_2.md` §4 before adding many props in one view.
+
+**Adding a prop:**
+1. Add an entry to `PREFABS` in `tools/dmf/build_village.py`. Each entry lists the kit parts with position, rotation and scale. Buildings use `view=True, per_yaw=True, simplify=True` and `decimate` for the parts that may be collapse-decimated (roof tiles, chimney rocks); small props use a triangle `budget`. See the docstring of `build_village.py`.
+2. Rebuild with `tools/dmf/build_models.sh`.
+3. Place it with `prop` lines.
+
+Check the result with `preview_dmf.py --texdir romdisk` and a host frame dump.
+
+## 9. 3D models and the 3D field
 
 **Models** are `.dmf` files in `romdisk/models/` (format: `docs/DMF.md`). Rebuild all of them with `tools/dmf/build_models.sh`:
 * The hero needs Blender's Python: `python3.11 -m venv .venv && .venv/bin/pip install bpy==4.2.0 numpy pillow`, then `BPY=.venv/bin/python tools/dmf/build_models.sh`.
@@ -139,7 +183,7 @@ Static models pass `nullptr` for the skin.
 
 **Tuning the view** without rebuilding (host): `--tune name=value` on `battle_trace_f32`. Names are in `TUNES[]` in `src/field3d.cpp`: `cam_pitch`, `cam_dist`, `cam_fov`, `cam_look_h`, `hero_scale`, `walk_max_rate`, `shadow_alpha`, …. Render the result with `--dump` (below). Make the chosen values the defaults in `field3d.cpp`.
 
-**Which entity gets which model:** slime sheets use the cube, everything else the sphere (`field3d_draw`).
+**Which entity gets which model:** slime sheets use the skeleton warrior, everything else the skeleton mage (`field3d_draw`).
 
 ## Preview without hardware
 

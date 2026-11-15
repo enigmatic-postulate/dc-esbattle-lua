@@ -50,6 +50,14 @@
 static int g_diag_frame = 0;
 #define DIAG_F(...) do { if (BATTLE_DIAG && g_diag_frame <= 3) DIAG(__VA_ARGS__); } while (0)
 
+// Always-on boot breadcrumbs (every build): the same synchronous dbgio path as the FOUND:/
+// MISSING: lines, flushed per line, with milliseconds since boot. Boot prints ~30 lines, the
+// first two frames ~6 each, then one line at frames 60 and 600; nothing after that.
+static uint64 g_boot_ms0 = 0;
+#define BOOT(...) do { dbgio_printf("[boot %5lu ms] ", (unsigned long)(timer_ms_gettime64() - g_boot_ms0)); \
+                       dbgio_printf(__VA_ARGS__); dbgio_flush(); } while (0)
+#define BOOT_F(...) do { if (g_diag_frame <= 2) BOOT(__VA_ARGS__); } while (0)
+
 struct Sprite {
     kos_img_t img;
     pvr_ptr_t tex;
@@ -70,10 +78,10 @@ static_assert(offsetof(eng::Vert3, oargb) == offsetof(pvr_vertex_t, oargb), "Ver
 static_assert(eng::VERT == PVR_CMD_VERTEX && eng::VERT_EOL == PVR_CMD_VERTEX_EOL, "Vert3 commands");
 
 struct Material3 { pvr_poly_hdr_t hdr; pvr_list_t list; };
-static Material3 g_mats[64];
+static Material3 g_mats[128];       // village: ~90 (house variants per yaw x opaque/faded copies)
 static int g_nmats = 0;
 
-const int ARENA_VERTS = 8192;                       // 256 KiB; a field frame uses ~4k
+const int ARENA_VERTS = 16384;                      // 512 KiB; the village uses ~5-9k per frame
 static pvr_vertex_t g_arena[ARENA_VERTS] __attribute__((aligned(32)));
 struct Batch3 { int mat, first, count; };
 static Batch3 g_batches3[256];
@@ -217,7 +225,8 @@ namespace eng {
 
 Sprite sprite_load(const char* path, bool alpha) {
     DIAG("sprite_load(%s, alpha=%d) slot %d\n", path, alpha ? 1 : 0, g_sprite_count);
-    if (g_sprite_count >= MAX_SPRITES) { dbglog(DBG_ERROR, "sprite limit reached\n"); return 0; }
+    BOOT("png %s\n", path);
+    if (g_sprite_count >= MAX_SPRITES) { BOOT("sprite limit reached\n"); return 0; }
     ::Sprite* s = &g_sprites[g_sprite_count];
     memset(&s->img, 0, sizeof(s->img));
     s->tex = NULL;
@@ -225,13 +234,13 @@ Sprite sprite_load(const char* path, bool alpha) {
 
     int rc = png_to_img(path, alpha ? PNG_MASK_ALPHA : PNG_NO_ALPHA, &s->img);
     if (rc < 0 || !s->img.data || s->img.byte_count == 0) {
-        dbglog(DBG_ERROR, "png_to_img failed for %s\n", path);
+        BOOT("png_to_img failed for %s\n", path);
         return 0;
     }
     DIAG("  png ok: %lux%lu fmt=%lx bytes=%lu\n", (unsigned long)s->img.w, (unsigned long)s->img.h,
          (unsigned long)s->img.fmt, (unsigned long)s->img.byte_count);
     s->tex = pvr_mem_malloc(s->img.byte_count);
-    if (!s->tex) { dbglog(DBG_ERROR, "pvr_mem_malloc failed\n"); return 0; }
+    if (!s->tex) { BOOT("pvr_mem_malloc(%lu) failed\n", (unsigned long)s->img.byte_count); return 0; }
     pvr_txr_load_kimg(&s->img, s->tex, PVR_TXRLOAD_16BPP);
     g_vram_bytes += s->img.byte_count;
 
@@ -265,7 +274,7 @@ void sprite_draw(Sprite handle, float x, float y, float w, float h, float a, int
 // Memory texture (.dmf): same upload path as the PNGs (kos_img_t + pvr_txr_load_kimg twiddles it).
 Sprite texture_create(const uint16_t* texels, int w, int h, int fmt) {
     DIAG("texture_create(%dx%d fmt %d) slot %d\n", w, h, fmt, g_sprite_count);
-    if (g_sprite_count >= MAX_SPRITES) { dbglog(DBG_ERROR, "sprite limit reached\n"); return 0; }
+    if (g_sprite_count >= MAX_SPRITES) { BOOT("sprite limit reached\n"); return 0; }
     if (w < 8 || h < 8 || w > 1024 || h > 1024 || (w & (w - 1)) || (h & (h - 1)) || fmt < 1 || fmt > 3) return 0;
     ::Sprite* s = &g_sprites[g_sprite_count];
     memset(&s->img, 0, sizeof(s->img));
@@ -277,7 +286,7 @@ Sprite texture_create(const uint16_t* texels, int w, int h, int fmt) {
     s->alpha = fmt != 1;
     s->pvr_fmt = fmt == 1 ? (int)PVR_TXRFMT_RGB565 : (fmt == 2 ? (int)PVR_TXRFMT_ARGB4444 : (int)PVR_TXRFMT_ARGB1555);
     s->tex = pvr_mem_malloc(s->img.byte_count);
-    if (!s->tex) { dbglog(DBG_ERROR, "pvr_mem_malloc failed\n"); return 0; }
+    if (!s->tex) { BOOT("pvr_mem_malloc failed (texture_create)\n"); return 0; }
     pvr_txr_load_kimg(&s->img, s->tex, PVR_TXRLOAD_16BPP);
     g_vram_bytes += s->img.byte_count;
     const pvr_list_t list = s->alpha ? PVR_LIST_TR_POLY : PVR_LIST_OP_POLY;
@@ -291,7 +300,7 @@ Sprite texture_create(const uint16_t* texels, int w, int h, int fmt) {
 }
 
 Material material_create(Sprite tex, int flags) {
-    if (g_nmats >= (int)(sizeof(g_mats) / sizeof(g_mats[0]))) { dbglog(DBG_ERROR, "material limit reached\n"); return 0; }
+    if (g_nmats >= (int)(sizeof(g_mats) / sizeof(g_mats[0]))) { BOOT("material limit reached\n"); return 0; }
     if (tex < 0 || tex > g_sprite_count) return 0;
     Material3& m = g_mats[g_nmats];
     m.list = (flags & MAT_TRANSLUCENT) ? PVR_LIST_TR_POLY : PVR_LIST_OP_POLY;
@@ -357,7 +366,10 @@ float random01() {
     return (float)(g_rng >> 8) / 16777216.0f;
 }
 
-void dbg_print(const char* s) { dbglog(DBG_INFO, "%s\n", s); }
+// Game messages (dmf: ..., map errors) use the same path as the breadcrumbs: dbgio directly,
+// independent of dbglog's level filter.
+void dbg_print(const char* s) { dbgio_printf("%s\n", s); dbgio_flush(); }
+void boot_log(const char* s) { BOOT("%s\n", s); }
 
 int file_read(const char* path, char* buf, int cap) {
     file_t f = fs_open(path, O_RDONLY);
@@ -369,32 +381,69 @@ int file_read(const char* path, char* buf, int cap) {
     return n;
 }
 
+bool file_exists(const char* path) {
+    file_t f = fs_open(path, O_RDONLY);
+    if (f < 0) return false;
+    fs_close(f);
+    return true;
+}
+
 void seed_random(uint32_t seed) { g_rng = seed ? seed : 12345u; }
 
 } // namespace eng
 
 // ============================================================================
 int main(int, char**) {
+    g_boot_ms0 = timer_ms_gettime64();
+#if defined(PVR_DEFAULTS)
+    // make PVR_DEFAULTS=1: the stock init (512 KiB TA vertex buffers), for A/B triage.
     pvr_init_defaults();
+    const unsigned vbuf_kib = 512;
+#else
+    // Same as pvr_init_defaults() in this KOS (read from its code: OP/TR bins 16, overflow 3,
+    // autosort on, no DMA/FSAA) except a 1 MiB TA vertex buffer instead of 512 KiB: the village
+    // submits up to ~14k vertices per frame (~450 KB + headers); an overflow drops polygons.
+    // VRAM (pvr_allocate_buffers): each of the 2 TA buffer sets sits in its own 4 MiB bank -
+    // vertex buffer + OPBs + tile matrix + one frame buffer, ~1.8 MiB of 4 - and textures get
+    // the rest (~4.4 MiB; the game uses ~0.6 MiB).
+    pvr_init_params_t params;
+    memset(&params, 0, sizeof params);
+    params.opb_sizes[0] = PVR_BINSIZE_16;        // OP
+    params.opb_sizes[1] = PVR_BINSIZE_0;         // OP modifiers
+    params.opb_sizes[2] = PVR_BINSIZE_16;        // TR
+    params.opb_sizes[3] = PVR_BINSIZE_0;         // TR modifiers
+    params.opb_sizes[4] = PVR_BINSIZE_0;         // PT
+    params.vertex_buf_size = 1024 * 1024;
+    params.opb_overflow_count = 3;
+    pvr_init(&params);
+    const unsigned vbuf_kib = 1024;
+#endif
     dbgio_init();
     dbgio_dev_select("scif");
     dbglog(DBG_INFO, "=== DREAMCAST BOOT (C++ field + battle) ===\n");
+    BOOT("pvr up: TA vertex buffer %u KiB, texture VRAM free %lu KiB\n", vbuf_kib,
+         (unsigned long)(pvr_mem_available() / 1024));
     DIAG("main: pvr+dbgio up. sizeof(pvr_vertex_t)=%u sizeof(::Sprite)=%u\n",
          (unsigned)sizeof(pvr_vertex_t), (unsigned)sizeof(::Sprite));
 
-    check_file("/rd/maps/test_field.txt");
+    check_file("/rd/maps/village.txt");
     check_file("/rd/tiles.png");
     check_file("/rd/hero.png");
     check_file("/rd/ui_icons.png");
     check_file("/rd/font.png");
     check_file("/rd/models/knight.dmf");
-    check_file("/rd/models/cube.dmf");
-    check_file("/rd/models/sphere.dmf");
+    check_file("/rd/models/skel_warrior.dmf");
+    check_file("/rd/models/house_stone.dmf");
+    check_file("/rd/tex/ground.png");
+    check_file("/rd/models/skel_mage.dmf");
 
     eng::seed_random((uint32_t)timer_ms_gettime64());
 #if !defined(DIAG_SKIP_GAME)
     DIAG("main: game_init begin\n");
-    if (!bt::game_init("/rd/maps/test_field.txt")) dbglog(DBG_ERROR, "game_init: map failed to load\n");
+    BOOT("game_init begin\n");
+    if (!bt::game_init("/rd/maps/village.txt")) BOOT("game_init: map failed to load (see 'map error' above)\n");
+    BOOT("game_init done: %d textures, %lu KiB texture VRAM used, %lu KiB free, heap %d KiB\n", g_sprite_count,
+         (unsigned long)(g_vram_bytes / 1024), (unsigned long)(pvr_mem_available() / 1024), mallinfo().uordblks / 1024);
     DIAG("main: game_init done, VRAM textures %lu KiB in %d sprite slots\n",
          (unsigned long)(g_vram_bytes / 1024), g_sprite_count);
 #else
@@ -424,10 +473,12 @@ int main(int, char**) {
             ++steps;
         }
         if (steps == 4) acc60 = 0;               // fell far behind (e.g. after loading): drop the backlog
+        BOOT_F("frame %d: %d tick(s) done\n", g_diag_frame, steps);
         DIAG_F("frame %d: %d tick(s)\n", g_diag_frame, steps);
 
         DIAG_F("frame %d: wait_ready\n", g_diag_frame);
         pvr_wait_ready();
+        BOOT_F("frame %d: PVR ready\n", g_diag_frame);
         uint64 draw_start = timer_us_gettime64();
         pvr_scene_begin();
         g_seq = 0;
@@ -436,6 +487,7 @@ int main(int, char**) {
         bt::game_draw();                          // queues sprites + rects
 #endif
         draw_input_overlay();
+        BOOT_F("frame %d: drawn (%d 3D verts in %d batches, %d rects)\n", g_diag_frame, g_arena_used, g_nbatches3, g_rect_qn);
 
         DIAG_F("frame %d: OP list (rects queued=%d)\n", g_diag_frame, g_rect_qn);
         pvr_list_begin(PVR_LIST_OP_POLY);
@@ -451,8 +503,16 @@ int main(int, char**) {
         rect_flush_list(PVR_LIST_TR_POLY);
         pvr_list_finish();
 
+        BOOT_F("frame %d: lists submitted\n", g_diag_frame);
         pvr_scene_finish();
         uint64 done = timer_us_gettime64();
+        BOOT_F("frame %d: scene finished\n", g_diag_frame);
+        if (g_diag_frame == 60 || g_diag_frame == 600) {
+            pvr_stats_t ps;
+            pvr_get_stats(&ps);
+            BOOT("frame %d: running, %.1f fps, TA vertex buffer peak %lu KiB of %u\n", g_diag_frame,
+                 (double)ps.frame_rate, (unsigned long)(ps.vtx_buffer_used_max / 1024), vbuf_kib);
+        }
         g_rect_qn = 0;
 
         // CPU time spent on this frame = game ticks + building/submitting the scene

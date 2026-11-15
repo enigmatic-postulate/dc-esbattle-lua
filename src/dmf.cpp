@@ -12,9 +12,10 @@ static_assert(sizeof(Batch) == 16, "dmf batch layout");
 static_assert(sizeof(Bone) == 96, "dmf bone layout");
 static_assert(sizeof(Anim) == 32, "dmf anim layout");
 static_assert(sizeof(TexHeader) == 32, "dmf texture header layout");
+static_assert(sizeof(Material) == 64, "dmf material layout");
 
 // Model files live here for the whole session (load-time only; no per-frame allocation).
-const int ARENA_BYTES = 192 * 1024;
+const int ARENA_BYTES = 1024 * 1024;     // village: 541 KiB (hero, 2 skeletons, props, 4 house variants) + room for the all-yaw house fallbacks
 alignas(32) static uint8_t g_arena[ARENA_BYTES];
 static int g_arena_used = 0;
 
@@ -45,7 +46,9 @@ bool parse(const void* data, int size_i, Model* out, char* err, int errlen) {
     const uint8_t* b = (const uint8_t*)data;
     const Header* h = (const Header*)b;
     if (memcmp(h->magic, "DMF1", 4) != 0) return fail(err, errlen, "bad magic");
-    if (h->version != 1) return fail(err, errlen, "unsupported version");
+    if (h->version != 1 && h->version != 2) return fail(err, errlen, "unsupported version");
+    if (h->version == 1 && (h->num_materials || h->off_materials)) return fail(err, errlen, "v1 with materials");
+    if (h->num_materials > MAX_MATERIALS) return fail(err, errlen, "too many materials");
     if (h->file_size != size || size % 32) return fail(err, errlen, "file_size mismatch");
     if (h->num_verts == 0 || h->num_groups == 0 || h->num_batches == 0) return fail(err, errlen, "empty model");
     if (h->num_bones > MAX_BONES) return fail(err, errlen, "too many bones");
@@ -107,6 +110,7 @@ bool parse(const void* data, int size_i, Model* out, char* err, int errlen) {
             ++strips; tris += len - 2; i += 1 + len;
         }
         if (strips != bt.num_strips || tris != bt.num_tris) return fail(err, errlen, "batch counts mismatch");
+        if ((bt.flags >> 8) >= (h->num_materials ? h->num_materials : 1u)) return fail(err, errlen, "batch material out of range");
     }
     // animations
     if (h->num_anims) {
@@ -137,11 +141,62 @@ bool parse(const void* data, int size_i, Model* out, char* err, int errlen) {
     } else if (h->off_tex) {
         return fail(err, errlen, "texture without TEXTURED flag");
     }
+    // materials (v2). v1: one implicit material = the embedded texture, or untextured.
+    if (h->num_materials) {
+        if (!range_ok(h->off_materials, 64u * h->num_materials, size, 4)) return fail(err, errlen, "materials out of range");
+        const Material* mt = (const Material*)(b + h->off_materials);
+        for (int k = 0; k < h->num_materials; ++k) {
+            if (!memchr(mt[k].tex, 0, sizeof mt[k].tex)) return fail(err, errlen, "material name not terminated");
+            const char* t = mt[k].tex;
+            if (t[0] == '@' && t[1] == 0 && !out->tex) return fail(err, errlen, "material uses a missing embedded texture");
+            if (t[0] != 0 && !(t[0] == '@' && t[1] == 0) && t[0] != '/') return fail(err, errlen, "bad texture reference");
+        }
+        out->num_mats = h->num_materials;
+    } else if (h->off_materials) {
+        return fail(err, errlen, "material offset without materials");
+    } else {
+        out->num_mats = 1;
+    }
     // bounding sphere (bind pose); animation stays close to it, callers add margin
     out->centre = r3d::v3((h->bmin[0] + h->bmax[0]) * 0.5f, (h->bmin[1] + h->bmax[1]) * 0.5f, (h->bmin[2] + h->bmax[2]) * 0.5f);
     r3d::Vec3 ext = r3d::v3(h->bmax[0] - h->bmin[0], h->bmax[1] - h->bmin[1], h->bmax[2] - h->bmin[2]);
     out->radius = 0.5f * sqrtf(r3d::dot(ext, ext));
     return true;
+}
+
+// Shared textures (v2 materials), cached by path for the whole session: the village kit's wood
+// trim is referenced by doors, windows, crates, fences and the wagon but uploaded once.
+struct SharedTex { const char* path; bool alpha; eng::Sprite spr; };
+static SharedTex g_shared[24];
+static int g_nshared = 0;
+
+eng::Sprite shared_texture(const char* path, bool alpha) {
+    for (int i = 0; i < g_nshared; ++i)
+        if (g_shared[i].alpha == alpha && strcmp(g_shared[i].path, path) == 0) return g_shared[i].spr;
+    eng::Sprite s = eng::sprite_load(path, alpha);       // path lives in the model arena (persistent)
+    if (!s) {
+        char msg[96];
+        snprintf(msg, sizeof msg, "dmf: shared texture %s failed to load", path);
+        eng::dbg_print(msg);
+    }
+    if (g_nshared < (int)(sizeof g_shared / sizeof g_shared[0])) g_shared[g_nshared++] = SharedTex{ path, alpha, s };
+    return s;
+}
+
+static void resolve_materials(Model* m) {
+    if (!m->h->num_materials) {                           // v1: the embedded texture or nothing
+        m->mat_tex[0] = m->texture;
+        m->mat_flags[0] = (m->tex && m->tex->filter) ? MAT_BILINEAR : 0;
+        return;
+    }
+    const Material* mt = (const Material*)(m->base + m->h->off_materials);
+    for (int k = 0; k < m->num_mats; ++k) {
+        const char* t = mt[k].tex;
+        m->mat_flags[k] = mt[k].flags;
+        if (t[0] == 0) m->mat_tex[k] = 0;
+        else if (t[0] == '@') m->mat_tex[k] = m->texture;
+        else m->mat_tex[k] = shared_texture(t, (mt[k].flags & MAT_ALPHA) != 0);
+    }
 }
 
 bool load(const char* path, Model* out) {
@@ -168,6 +223,7 @@ bool load(const char* path, Model* out) {
             eng::dbg_print(msg);
         }
     }
+    resolve_materials(out);
     snprintf(msg, sizeof msg, "dmf: %s ok: %u verts, %u bones, %u anims, %d bytes", path, out->h->num_verts,
              out->h->num_bones, out->h->num_anims, n);
     eng::dbg_print(msg);

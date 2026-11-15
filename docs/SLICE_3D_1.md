@@ -1,5 +1,13 @@
 # 3D slice 1: the field in 3D with a KayKit hero
 
+> **Superseded in part by VS2 (`SLICE_3D_2.md`):**
+> * the field is now a 3D village;
+> * the cube/sphere placeholders are now skeletons;
+> * the hero uses native KayKit clips and runs at 2.81 tiles/s;
+> * `.dmf` is v2.
+>
+> The pipeline, verification and hardware notes below still apply.
+
 **Goal.** The overworld (field) becomes 3D:
 * the tile backdrop is replaced by a 3D ground plane;
 * the hero is a 3D KayKit model, packaged as `.dmf` and animated, and walks with the analog stick;

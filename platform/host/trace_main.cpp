@@ -66,7 +66,7 @@ static void snapshot_game() {
 int main(int argc, char** argv) {
     if (argc < 3) { fprintf(stderr, "usage: %s inputs out [--battle-test ENC] [--map PATH] [--romdisk DIR] [--state-only]\n", argv[0]); return 2; }
     const char* battle_test = nullptr;
-    const char* map = "/rd/maps/test_field.txt";
+    const char* map = "/rd/maps/village.txt";
     bool view = false;
     int dump_every = 0;
     std::vector<int> dump_frames;
@@ -126,9 +126,10 @@ int main(int argc, char** argv) {
         if (view && (md == bt::GameMode::Field || md == bt::GameMode::ToBattle)) {
             bt::Field3dInfo vi = bt::field3d_info();
             const r3d::Stats& st = r3d::stats();
-            fprintf(g_trace, "V cam=%.3f,%.3f yaw=%.3f walk=%.2f models=%d culled=%d tris=%d xf=%d out=%d arena=%d batches=%d\n",
-                    vi.cam_x, vi.cam_z, vi.hero_yaw, vi.walk_weight, st.models, st.models_culled, st.tris,
-                    st.verts_xf, st.verts_out, host_arena_used(), host_batches());
+            fprintf(g_trace, "V cam=%.3f,%.3f yaw=%.3f walk=%.2f models=%d culled=%d statics=%d culled=%d near=%d strips_culled=%d tris=%d xf=%d out=%d arena=%d batches=%d\n",
+                    vi.cam_x, vi.cam_z, vi.hero_yaw, vi.walk_weight, st.models, st.models_culled, st.statics, st.statics_culled,
+                    st.statics_near, st.strips_culled,
+                    st.tris, st.verts_xf, st.verts_out, host_arena_used(), host_batches());
         }
     }
     fclose(g_trace);

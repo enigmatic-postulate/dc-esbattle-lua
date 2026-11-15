@@ -67,9 +67,14 @@ void set_clear_color(uint32_t rgb);
 
 float random01();
 void  dbg_print(const char* s);
+// Boot/progress breadcrumb: always on in the Dreamcast build (serial log, flushed at once,
+// with a millisecond timestamp), silent on the host. A log that stops after a breadcrumb
+// names the stage that stalled.
+void  boot_log(const char* s);
 
 // Reads a whole file (e.g. "/rd/maps/test_field.txt") into buf, NUL-terminated.
 // Returns the byte count, or -1 if missing / larger than cap-1.
 int file_read(const char* path, char* buf, int cap);
+bool file_exists(const char* path);
 
 } // namespace eng

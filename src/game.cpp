@@ -43,12 +43,16 @@ static void load_common_assets() {
 }
 
 bool game_init(const char* map_path) {
+    eng::boot_log("2D assets (icons, font, battle sprites)");
     load_common_assets();
     g_party = party_default();
     g_battle_test = false;
+    eng::boot_log("field_load");
     if (!field_load(map_path)) { g_mode = GameMode::Error; return false; }
+    eng::boot_log("field3d_init");
     field3d_init();
     field3d_reset();
+    eng::boot_log("game_init: field ready");
     g_mode = GameMode::Field;
     g_fade_in = T_FADE_IN;
     return true;
