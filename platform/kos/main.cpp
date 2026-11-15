@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "../../src/engine.h"
+#include "../../src/hwmath.h"      // SH4ZAM: version check + the library (see src/hwmath.h)
 #include "../../src/game.h"
 
 #ifndef PNG_NO_ALPHA
@@ -129,7 +130,7 @@ static void emit_sprite_quads(const pvr_poly_hdr_t* hdr, std::vector<SpriteCmd>&
     for (const auto& c : q) {
         float hw = c.w * 0.5f, hh = c.h * 0.5f;
         float cs = 1.0f, sn = 0.0f;
-        if (c.a != 0.0f) { cs = fcos(c.a); sn = fsin(c.a); }
+        if (c.a != 0.0f) { const shz_sincos_t r = shz_sincosf(c.a); cs = r.cos; sn = r.sin; }   // one FSCA
         float lx[4] = { -hw,  hw, -hw,  hw };
         float ly[4] = { -hh, -hh,  hh,  hh };
         float x[4], y[4];
@@ -421,6 +422,13 @@ int main(int, char**) {
     dbgio_init();
     dbgio_dev_select("scif");
     dbglog(DBG_INFO, "=== DREAMCAST BOOT (C++ field + battle) ===\n");
+    {   // SH4ZAM: headers compiled against vs library linked (they must match; see src/hwmath.h)
+        uint8_t maj = 0, pat = 0; uint16_t mnr = 0;
+        shz_version_fields(shz_version_linked(), &maj, &mnr, &pat);
+        BOOT("sh4zam %u.%u.%u linked (headers %u.%u.%u, %s back-end)%s\n", (unsigned)maj, (unsigned)mnr, (unsigned)pat,
+             (unsigned)SHZ_VERSION_MAJOR, (unsigned)SHZ_VERSION_MINOR, (unsigned)SHZ_VERSION_PATCH, SHZ_BACKEND == SHZ_SH4 ? "SH4" : "software",
+             shz_version_linked() == SHZ_VERSION ? "" : "  ** MISMATCH: rebuild against one SH4ZAM install **");
+    }
     BOOT("pvr up: TA vertex buffer %u KiB, texture VRAM free %lu KiB\n", vbuf_kib,
          (unsigned long)(pvr_mem_available() / 1024));
     DIAG("main: pvr+dbgio up. sizeof(pvr_vertex_t)=%u sizeof(::Sprite)=%u\n",

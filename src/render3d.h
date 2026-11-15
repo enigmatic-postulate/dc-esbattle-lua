@@ -17,11 +17,15 @@ namespace r3d {
 struct Camera {
     Mat34 view;          // world -> view (camera looks down -Z)
     Mat34 proj_view;     // world -> (X, Y, W) with screen = (cx + X/W, cy + Y/W), z = 1/W
+    Mat34 screen;        // viewport * proj_view: world -> (X', Y', W) with screen = (X'/W, Y'/W), z = 1/W.
+                         // Loaded into XMTRX, one FTRV + one FSRRA give a vertex's screen position.
     Vec3  eye;
     float focal;         // pixels
     float cx, cy;
     float near_w;        // minimum W kept (geometry closer than this is clipped)
     float tan_x, tan_y;  // half-FOV tangents, for sphere culling
+    float cos_x, cos_y;  // 1 / sqrt(1 + tan^2): side-plane normal scale (sphere culling)
+    float sec_x, sec_y;  // sqrt(1 + tan^2)
 };
 
 void camera_look(Camera* c, Vec3 eye, Vec3 target, float fov_y_deg);

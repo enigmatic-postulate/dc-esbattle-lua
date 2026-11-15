@@ -1,5 +1,6 @@
 // ui.cpp - port of battle/ui.lua
 #include "ui.h"
+#include "fastmath.h"
 #include "font.h"
 #include "icons.h"
 #include "input.h"
@@ -140,7 +141,7 @@ void ui_draw(BattleCtx& ctx) {
 
     probe_draw(ctx);
 
-    real bob = sin((real)ui.bob_ticks * TICK_DT * (real)7.0) * (real)4.0;
+    real bob = rsin((real)ui.bob_ticks * TICK_DT * (real)7.0) * (real)4.0;
 
     if (act->team != Team::Player) {   // enemy turn: marker over the acting enemy
         draw_marker(ctx, *act, bob, ICON_ENEMY_TURN);

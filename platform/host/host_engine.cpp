@@ -30,7 +30,7 @@ struct Mat { eng::Sprite tex; int flags; };
 static Mat g_mats[128];
 static int g_nmats = 0;
 static const int ARENA_VERTS = 16384;
-static eng::Vert3 g_arena[ARENA_VERTS];
+alignas(32) static eng::Vert3 g_arena[ARENA_VERTS];   // 32-byte vertices, like the PVR arena (shz_memcpy32_1 contract)
 static int g_arena_used = 0, g_open = -1, g_batches = 0, g_batch_verts = 0;
 static uint32_t g_clear = 0;
 

@@ -1,5 +1,6 @@
 // presentation.cpp - port of battle/presentation.lua
 #include "presentation.h"
+#include "fastmath.h"
 #include "icons.h"
 
 namespace bt {
@@ -17,7 +18,7 @@ void pres_lunge(BattleCtx& ctx, Actor* attacker, Actor* target, int dur, real di
     if (!attacker || !target) return;
     real dx = target->x - attacker->x;
     real dy = target->y - attacker->y;
-    real len = sqrt(dx * dx + dy * dy);
+    real len = rsqrt(dx * dx + dy * dy);
     real nx = 0, ny = 0;
     if (!(len < (real)0.0001)) { nx = dx / len; ny = dy / len; }
     push_move(ctx, attacker, dur, nx, ny, dist);

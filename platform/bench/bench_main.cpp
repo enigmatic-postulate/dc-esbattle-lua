@@ -20,7 +20,7 @@ bool input_down(Key k) { return (g_btn >> k) & 1; }
 int  input_axis(Axis) { return 0; }
 Sprite texture_create(const uint16_t*, int, int, int) { static int n = 100; return ++n; }
 Material material_create(Sprite, int) { static int n = 0; return ++n; }
-static Vert3 g_vtx[16384];
+alignas(32) static Vert3 g_vtx[16384];
 Vert3* vtx_begin(int max) { return max <= 16384 ? g_vtx : nullptr; }
 void vtx_end(Material, int used) { g_calls = g_calls + (uint32_t)used; }
 void set_clear_color(uint32_t) {}

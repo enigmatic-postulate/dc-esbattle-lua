@@ -2,6 +2,7 @@
 // Each update() advances at most one state per tick, exactly like the Lua if/elseif chain;
 // the tick-by-tick cadence is observable and preserved (verified by the harness).
 #include "battle.h"
+#include "fastmath.h"
 #include "assets.h"
 #include "chars.h"
 #include "font.h"
@@ -181,7 +182,7 @@ void battle_draw() {
             pres_offset(ctx, &a, ox, oy);
             real rot = 0;
             // LEGACY: anim_ticks only advances in Animate, so enemies freeze mid-wobble between actions.
-            if (a.team == Team::Enemy) rot = sin((real)ctx.anim_ticks * TICK_DT * (real)6.0) * (real)0.10;
+            if (a.team == Team::Enemy) rot = rsin((real)ctx.anim_ticks * TICK_DT * (real)6.0) * (real)0.10;
             int col = (a.sheet == SHEET_SLIME) ? (ctx.idle_ticks / 20) % 2 : (int)FRAME_STAND;   // slime squash idle
             char_draw(a.sheet, a.facing, col, a.x + ox, a.y + oy, a.w, rot, 0);
         }

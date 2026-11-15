@@ -1,5 +1,6 @@
 // fx.cpp - port of battle/fx.lua
 #include "fx.h"
+#include "fastmath.h"
 #include "font.h"
 #include <stdio.h>
 #include <string.h>
@@ -15,7 +16,7 @@ static const uint8_t SEG[10][7] = {
 };
 
 static uint32_t with_alpha(uint32_t argb, real a01) {
-    int a = clampv((int)floor(255 * a01 + (real)0.5), 0, 255);
+    int a = clampv((int)rfloor(255 * a01 + (real)0.5), 0, 255);
     return ((uint32_t)a << 24) | (argb & 0x00FFFFFFu);
 }
 

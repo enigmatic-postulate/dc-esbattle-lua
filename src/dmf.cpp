@@ -160,7 +160,7 @@ bool parse(const void* data, int size_i, Model* out, char* err, int errlen) {
     // bounding sphere (bind pose); animation stays close to it, callers add margin
     out->centre = r3d::v3((h->bmin[0] + h->bmax[0]) * 0.5f, (h->bmin[1] + h->bmax[1]) * 0.5f, (h->bmin[2] + h->bmax[2]) * 0.5f);
     r3d::Vec3 ext = r3d::v3(h->bmax[0] - h->bmin[0], h->bmax[1] - h->bmin[1], h->bmax[2] - h->bmin[2]);
-    out->radius = 0.5f * sqrtf(r3d::dot(ext, ext));
+    out->radius = 0.5f * sqrtf(r3d::dot(ext, ext));        // load time, conservative bound: exact sqrtf
     return true;
 }
 
@@ -244,14 +244,14 @@ float anim_duration(const Model& m, int k) {
 void pose_bind(const Model& m, Pose* p) {
     for (int i = 0; i < m.h->num_bones; ++i) {
         const Bone& b = m.bones[i];
-        p->q[i] = r3d::Quat{ b.bind_q[0], b.bind_q[1], b.bind_q[2], b.bind_q[3] };
+        p->q[i] = r3d::quat_xyzw(b.bind_q[0], b.bind_q[1], b.bind_q[2], b.bind_q[3]);
         p->t[i] = r3d::v3(b.bind_t[0], b.bind_t[1], b.bind_t[2]);
     }
 }
 
-static inline r3d::Quat q16(const int16_t* s) {
+static inline r3d::Quat q16(const int16_t* s) {      // stored X, Y, Z, W
     const float k = 1.0f / 32767.0f;
-    return r3d::Quat{ s[0] * k, s[1] * k, s[2] * k, s[3] * k };
+    return r3d::quat_xyzw(s[0] * k, s[1] * k, s[2] * k, s[3] * k);
 }
 
 void pose_sample(const Model& m, int k, float t_sec, Pose* p) {
@@ -261,7 +261,7 @@ void pose_sample(const Model& m, int k, float t_sec, Pose* p) {
     float f = t_sec * a.fps;
     int i0, i1;
     if (a.flags & ANIM_LOOP) {
-        f = fmodf(f, (float)F);
+        f = shz_fmodf(f, (float)F);
         if (f < 0.0f) f += (float)F;
         i0 = (int)f;
         if (i0 >= F) i0 = F - 1;                     // fmodf rounding at the wrap
@@ -298,15 +298,26 @@ void pose_blend(Pose* a, const Pose& b, int nb, float w) {
     }
 }
 
+// Per bone, all in XMTRX (SH4ZAM): world = parent * T(t) * R(q), then skin = world * inv_bind.
+// The rotation is built from the quaternion inside the matrix bank; the .dmf inverse bind matrix
+// is 12 floats, row-major - the Mat34 layout.
 void pose_skin(const Model& m, const Pose& p, r3d::Mat34* skin) {
     r3d::Mat34 world[MAX_BONES];
     for (int i = 0; i < m.h->num_bones; ++i) {
         const Bone& b = m.bones[i];
-        r3d::Mat34 local = r3d::mat_from_qt(p.q[i], p.t[i]);
-        world[i] = b.parent < 0 ? local : r3d::mat_mul(world[b.parent], local);
+        if (b.parent < 0) {
+            shz_xmtrx_init_rotation_quat(p.q[i]);                    // XMTRX = R
+            shz_xmtrx_set_translation(p.t[i].x, p.t[i].y, p.t[i].z); // XMTRX = T * R
+        } else {
+            r3d::xmtrx_load(world[b.parent]);                        // XMTRX = parent
+            shz_xmtrx_translate(p.t[i].x, p.t[i].y, p.t[i].z);       // XMTRX = parent * T
+            shz_xmtrx_rotate_quat(p.q[i]);                           // XMTRX = parent * T * R
+        }
+        r3d::xmtrx_store(&world[i]);
         r3d::Mat34 inv;
-        memcpy(inv.m, b.inv_bind, sizeof inv.m);
-        skin[i] = r3d::mat_mul(world[i], inv);
+        memcpy(inv.m, b.inv_bind, sizeof inv.m);                     // file floats, row-major == Mat34
+        r3d::xmtrx_apply(inv);                                       // XMTRX = world * inv_bind
+        r3d::xmtrx_store(&skin[i]);
     }
 }
 

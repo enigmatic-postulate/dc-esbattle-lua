@@ -97,7 +97,9 @@ Input scripts are one line per 60 Hz tick: `<dt> <buttons-hex> [<stick-x> <stick
 
 The 3D slice adds `tests/slice3d/run.sh` (see `docs/SLICE_3D_1.md` §6): runtime vs reference, validator cross-check, sanitizer fuzz, movement invariants, float == double, battle traces vs a baseline (`BASELINE=<dir>`), and SH4 runs under qemu (`SH4=1`).
 
-**Building for the Dreamcast.** The makefile tracks header dependencies (`.d` files) since the VS2 fix-up. Run `make clean` once after updating from an older tree, and whenever you change a build flag (`DIAG=1`, `R3D_SAFE=1`, `PVR_DEFAULTS=1`). Every build prints `[boot]` breadcrumbs on the serial log; `TRIAGE.md` (last section) lists the expected sequence.
+**Building for the Dreamcast.** The makefile tracks header dependencies (`.d` files) since the VS2 fix-up. Run `make clean` once after updating from an older tree, and whenever you change a build flag (`DIAG=1`, `R3D_SAFE=1`, `PVR_DEFAULTS=1`, `SHZ_DEBUG=1`, `HOT_OPT=`). Every build prints `[boot]` breadcrumbs on the serial log; `TRIAGE.md` (last section) lists the expected sequence.
+
+**SH4ZAM (required since the SH4ZAM slice).** The 3D math runs on the SH4ZAM library; see §10. Install its KallistiOS port once (DreamSDK Manager > KallistiOS Ports > SH4ZAM; or `cd $KOS_PORTS/sh4zam && make install`), or build against a checkout with `make SH4ZAM_DIR=<path>`. The host build (`make host`, `tests/run_tests.sh`) needs a checkout and CMake: it finds `SH4ZAM_DIR`, `external/sh4zam` or `../sh4zam/sh4zam`.
 
 **Battle controls.** Command ring: ◀▶ choose, A select, Y jumps to Guard. Attack → pick a target (◀▶, A), B back. Fire → confirm step with every enemy marked (A cast), B back. Guard casts immediately.
 
@@ -200,3 +202,15 @@ python3 tools/render_frame.py /tmp/frames/frame_00120.txt romdisk /tmp/frame120.
 ```
 
 `--view` adds a `V` line per field tick (camera, hero yaw, walk blend, triangles, vertices, arena use).
+
+## 10. The SH4 math layer (SH4ZAM)
+
+The renderer's math goes through SH4ZAM (`docs/SLICE_SH4ZAM.md`), linked as a library and never copied into this tree, as SH4ZAM's AGENTS.md asks. `src/hwmath.h` is the one include point and checks the version (0.10.0 or newer). On the Dreamcast this compiles to FTRV (matrix × vector in the XMTRX register bank), FSCA (sine and cosine), FSRRA (1/sqrt, used for sqrt, normalise and the perspective divide) and MOVCA.L/PREF (cache). The host harness builds SH4ZAM's portable C back-end from the same calls.
+
+When you touch the 3D code:
+* **Use `src/math3d.h`.** It keeps the renderer's types (`Vec3`, `Quat` = `shz::quat`, row-major `Mat34`) and forwards to SH4ZAM. For many points against one matrix: `xmtrx_load(m)` (and `xmtrx_apply(...)` for products), then `xmtrx_point(p)` per point. For a single point, use `mat_point` (no XMTRX).
+* **XMTRX is scratch.** Load it, run the batch, and call nothing that reloads it in between (`mat_mul`, `mat_look_at`, `mat_from_qt`, `camera_look`, `emit_poly`, `box_vis`...). `vtx_begin`/`vtx_end` are safe.
+* **No pointer casts between the game's types and SH4ZAM's.** Convert vectors component by component (`sv()`/`rv()`), and pass matrices through `Mat34::rows`. A cast is type punning, and GCC's strict-aliasing optimisation broke exactly that on the SH4 build (`docs/SLICE_SH4ZAM.md` §6.1).
+* **`shz_invf_fsrra(W)` needs W > 0**: the vertex paths clamp W to `near_w` first. `shz_sincosf` takes angles in 1/65536 turns (about 0.0055° steps). `shz_fminf`/`shz_fmaxf`/`shz_clampf` are NaN-aware library calls on the SH4 without `-ffast-math`: keep plain compares in loops.
+* **Vertex writes**: a whole 32-byte vertex written to the arena or to `g_xv` goes through `put_vert()` (MOVCA.L first). Use `shz_dcache_alloc_line` only when all 32 bytes of the line are then written.
+* **Check on the SH4 path as well as the host.** `tests/sh4zam/` runs the real SH4 code under qemu: logic traces, `tools/compare_frames.py` against a reference build's frame dumps, and instruction counts (`tests/sh4zam/README.md`).

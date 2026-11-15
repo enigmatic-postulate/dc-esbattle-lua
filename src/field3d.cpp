@@ -91,7 +91,7 @@ static uint32_t g_hero_lit[HERO_YAW_BUCKETS][2048];
 static bool g_hero_lit_ok = false;
 
 static int yaw_bucket(float yaw, int buckets) {
-    int b = (int)floorf(yaw * ((float)buckets / 6.28318531f) + 0.5f) % buckets;
+    int b = (int)shz_floorf(yaw * ((float)buckets / 6.28318531f) + 0.5f) % buckets;
     return b < 0 ? b + buckets : b;
 }
 static int g_fence = -1, g_tree = -1;
@@ -137,7 +137,7 @@ static int g_nlit = 0;
 static bool g_scene_built = false;
 
 static const uint32_t* lit_colors(int model, float yaw_rad, const Mat34& world) {
-    const int yq = (int)floorf(yaw_rad * (180.0f / 3.14159265f) + 0.5f);      // 1-degree buckets
+    const int yq = (int)shz_floorf(yaw_rad * (180.0f / 3.14159265f) + 0.5f);  // 1-degree buckets
     for (int i = 0; i < g_nlit; ++i)
         if (g_lit[i].model == model && g_lit[i].yaw_q == yq) return g_lit[i].colors;
     const dmf::Model& m = g_models[model].m;
@@ -185,7 +185,7 @@ static void build_scene() {
         // can see at that yaw (tools/dmf/build_village.py, view culling); <model>.dmf is safe at
         // any yaw. Same look, fewer vertices. There are no distance LODs.
         int mi = -1;
-        const float yaw_n = fmodf(fmodf(p.rot_deg, 360.0f) + 360.0f, 360.0f);
+        const float yaw_n = shz_fmodf(shz_fmodf(p.rot_deg, 360.0f) + 360.0f, 360.0f);
         if (yaw_n == (float)(int)yaw_n) {
             char vname[24], vpath[48];
             snprintf(vname, sizeof vname, "%s_r%d", p.model, (int)yaw_n);
@@ -278,10 +278,10 @@ static void locomotion_tick(Locomotion& L, const Clips& c, float d, float scale)
     L.run_w = c.run >= 0 ? clamp01((L.speed - RUN_FROM) / (RUN_FULL - RUN_FROM)) : 0.0f;
     const float stride = (c.walk_stride + (c.run_stride - c.walk_stride) * L.run_w) * scale;
     const float len = c.walk_len + (c.run_len - c.walk_len) * L.run_w;
-    float step = d / stride;
-    const float cap = MAX_RATE / (60.0f * len);
+    float step = shz_divf_fsrra(d, stride);                         // stride, len > 0
+    const float cap = shz_divf_fsrra(MAX_RATE, 60.0f * len);
     L.phase += step < cap ? step : cap;
-    L.phase -= floorf(L.phase);
+    L.phase -= shz_floorf(L.phase);
     L.idle_t += 1.0f / 60.0f;
     if (L.idle_t > 3600.0f) L.idle_t -= 3600.0f;
 }
@@ -299,9 +299,9 @@ static void locomotion_pose(const dmf::Model& m, const Clips& c, const Locomotio
 }
 
 static void field_camera(Camera* cam) {
-    const float pitch = CAM_PITCH * 3.14159265f / 180.0f;
+    const shz_sincos_t pitch = shz_sincosf_deg(CAM_PITCH);               // one FSCA
     Vec3 look = g_v.focus + v3(0, CAM_LOOK_H, 0);
-    camera_look(cam, look + v3(0, CAM_DIST * sinf(pitch), CAM_DIST * cosf(pitch)), look, CAM_FOV_Y);
+    camera_look(cam, look + v3(0, CAM_DIST * pitch.sin, CAM_DIST * pitch.cos), look, CAM_FOV_Y);
 }
 
 // ---------------------------------------------------------------------------- lifecycle
@@ -369,11 +369,14 @@ void field3d_tick() {
     float hx, hz;
     hero_world(h, &hx, &hz);
     float dx = hx - g_v.prev_x, dz = hz - g_v.prev_z;
-    float d = sqrtf(dx * dx + dz * dz);
+    float d = shz_sqrtf(dx * dx + dz * dz);
     if (d > 1.0f) d = 0.0f;                                   // teleport (reset): no stride
     g_v.prev_x = hx; g_v.prev_z = hz;
     locomotion_tick(g_v.hero, g_hero_clips, d, HERO_SCALE);
     if (h.vx || h.vy) {                                       // face the stick (also against walls)
+        // Exact atan2f on purpose (once per tick, not a hot path): a U-turn puts the target exactly
+        // pi away, and the last bit of this angle decides which way the knight spins. SH4ZAM's fast
+        // approximation (~1e-3 rad) would flip that tie-break on exact reversals.
         float turn = angle_diff(g_v.yaw, atan2f((float)h.vx, (float)h.vy)) * TURN_RATE;
         if (turn > TURN_MAX) turn = TURN_MAX;
         if (turn < -TURN_MAX) turn = -TURN_MAX;
@@ -382,13 +385,13 @@ void field3d_tick() {
         if (g_v.yaw < -3.14159265f) g_v.yaw += 6.28318531f;
     }
     Vec3 want = v3(hx, 0, hz);
-    if (sqrtf(dot(want - g_v.focus, want - g_v.focus)) > 8.0f) g_v.focus = want;
+    if (dot(want - g_v.focus, want - g_v.focus) > 8.0f * 8.0f) g_v.focus = want;
     g_v.focus = lerp(g_v.focus, want, CAM_FOLLOW);
     for (int i = 0; i < f.ents.size(); ++i) {
         g_v.ent_yaw[i] += angle_diff(g_v.ent_yaw[i], dir_yaw(f.ents[i].w.dir)) * 0.2f;
         int px, py;
         field_entity_pixel(i, &px, &py);
-        const float ed = sqrtf((float)((px - g_v.ent_px[i]) * (px - g_v.ent_px[i]) + (py - g_v.ent_py[i]) * (py - g_v.ent_py[i]))) / (float)TILE_PX;
+        const float ed = shz_sqrtf((float)((px - g_v.ent_px[i]) * (px - g_v.ent_px[i]) + (py - g_v.ent_py[i]) * (py - g_v.ent_py[i]))) / (float)TILE_PX;
         g_v.ent_px[i] = px; g_v.ent_py[i] = py;
         locomotion_tick(g_v.ent[i], g_enemy_clips[f.ents[i].sheet == SHEET_SLIME ? 0 : 1], ed > 1.0f ? 0.0f : ed, ENEMY_SCALE);
     }
@@ -400,9 +403,10 @@ void field3d_tick() {
     const Vec3 head = mat_point(cam.proj_view, v3(hx, 1.9f * HERO_SCALE / 0.8f, hz));
     float hx0 = 1e9f, hx1 = -1e9f, hy0 = 1e9f, hy1 = -1e9f;
     bool hero_ok = feet.z > cam.near_w && head.z > cam.near_w;
-    if (hero_ok) {
-        const float fx = cam.cx + feet.x / feet.z, fy = cam.cy + feet.y / feet.z;
-        const float tx = cam.cx + head.x / head.z, ty = cam.cy + head.y / head.z;
+    if (hero_ok) {                                             // W > near_w > 0: FSRRA reciprocals
+        const float fi = shz_invf_fsrra(feet.z), ti = shz_invf_fsrra(head.z);
+        const float fx = cam.cx + feet.x * fi, fy = cam.cy + feet.y * fi;
+        const float tx = cam.cx + head.x * ti, ty = cam.cy + head.y * ti;
         const float halfw = 0.35f * (fy - ty);                 // the Knight is about 0.7 as wide as tall
         hx0 = (fx < tx ? fx : tx) - halfw; hx1 = (fx > tx ? fx : tx) + halfw;
         hy0 = ty; hy1 = fy;
@@ -412,16 +416,19 @@ void field3d_tick() {
         StaticInst& s = g_statics[i];
         if (!s.fadeable) continue;
         bool hides = false;
-        if (hero_ok && fabsf(s.x - hx) < 8.0f && s.z > hz - 1.0f && s.z - hz < 12.0f) {
+        if (hero_ok && shz_fabsf(s.x - hx) < 8.0f && s.z > hz - 1.0f && s.z - hz < 12.0f) {
             const dmf::Model& m = g_models[s.model].m;
             float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f, wmin = 1e9f;
             bool behind_cam = false;
+            // XMTRX = proj_view * world: the 8 box corners are one FTRV each
+            xmtrx_load(cam.proj_view);
+            xmtrx_apply(s.world);
             for (int k = 0; k < 8; ++k) {
-                const Vec3 p = mat_point(s.world, v3((k & 1) ? m.h->bmax[0] : m.h->bmin[0], (k & 2) ? m.h->bmax[1] : m.h->bmin[1],
-                                                     (k & 4) ? m.h->bmax[2] : m.h->bmin[2]));
-                const Vec3 c = mat_point(cam.proj_view, p);
+                const Vec3 c = xmtrx_point((k & 1) ? m.h->bmax[0] : m.h->bmin[0], (k & 2) ? m.h->bmax[1] : m.h->bmin[1],
+                                           (k & 4) ? m.h->bmax[2] : m.h->bmin[2]);
                 if (c.z < cam.near_w) { behind_cam = true; break; }
-                const float sx = cam.cx + c.x / c.z, sy = cam.cy + c.y / c.z;
+                const float ci = shz_invf_fsrra(c.z);
+                const float sx = cam.cx + c.x * ci, sy = cam.cy + c.y * ci;
                 if (sx < x0) x0 = sx;
                 if (sx > x1) x1 = sx;
                 if (sy < y0) y0 = sy;
@@ -458,10 +465,13 @@ static void ground_bounds(const Camera& cam, float* x0, float* z0, float* x1, fl
         const float sx = (k & 1) ? 1.0f : -1.0f, sy = (k & 2) ? 1.0f : -1.0f;
         Vec3 d = fwd + r * (sx * cam.tan_x) + u * (sy * cam.tan_y);
         Vec3 p;
-        if (d.y < -1e-4f) p = cam.eye + d * (-cam.eye.y / d.y);
+        if (d.y < -1e-4f) p = cam.eye + d * shz_divf(-cam.eye.y, d.y);
         else p = cam.eye + normalize(v3(d.x, 0, d.z)) * GROUND_FAR;      // horizon in view
-        float hx = p.x - cam.eye.x, hz = p.z - cam.eye.z, hd = sqrtf(hx * hx + hz * hz);
-        if (hd > GROUND_FAR) { p.x = cam.eye.x + hx * GROUND_FAR / hd; p.z = cam.eye.z + hz * GROUND_FAR / hd; }
+        float hx = p.x - cam.eye.x, hz = p.z - cam.eye.z, hd = shz_sqrtf(hx * hx + hz * hz);
+        if (hd > GROUND_FAR) {
+            const float clamp = GROUND_FAR * shz_invf_fsrra(hd);
+            p.x = cam.eye.x + hx * clamp; p.z = cam.eye.z + hz * clamp;
+        }
         if (p.x < *x0) *x0 = p.x;
         if (p.x > *x1) *x1 = p.x;
         if (p.z < *z0) *z0 = p.z;
@@ -483,19 +493,22 @@ static uint32_t ground_shade(float dist) {
 const int MAX_GRID_W = MAX_MAP_W + 2 * BORDER_TILES + 2;
 struct GridPt { float x, y, z; uint32_t argb; bool front; Vec3 p; };
 
+// One row of grid points as an XMTRX batch: XMTRX = cam.screen (viewport folded in), one FTRV and
+// one FSRRA per point. The screen position of a point behind the near plane is never used (its
+// quads go through the clipper, from g.p). draw_ground's clipper calls reload XMTRX, so each row
+// loads it again.
 static void ground_row(const Camera& cam, int z, int x0, int x1, GridPt* row) {
-    const Mat34& P = cam.proj_view;
+    xmtrx_load(cam.screen);
+    const float ey2 = cam.eye.y * cam.eye.y, dz = (float)z - cam.eye.z;
     for (int x = x0; x <= x1; ++x) {
         GridPt& g = row[x - x0];
         g.p = v3((float)x, 0.0f, (float)z);
-        const float X = P.m[0][0] * g.p.x + P.m[0][2] * g.p.z + P.m[0][3];
-        const float Y = P.m[1][0] * g.p.x + P.m[1][2] * g.p.z + P.m[1][3];
-        const float W = P.m[2][0] * g.p.x + P.m[2][2] * g.p.z + P.m[2][3];
-        g.front = W >= cam.near_w;
-        const float inv = 1.0f / (g.front ? W : cam.near_w);
-        g.x = cam.cx + X * inv; g.y = cam.cy + Y * inv; g.z = inv;
-        const float dx = g.p.x - cam.eye.x, dz = g.p.z - cam.eye.z;
-        g.argb = ground_shade(sqrtf(dx * dx + cam.eye.y * cam.eye.y + dz * dz));
+        const Vec3 s = xmtrx_point(g.p);                          // (X', Y', W)
+        g.front = s.z >= cam.near_w;
+        const float inv = shz_invf_fsrra(g.front ? s.z : cam.near_w);
+        g.x = s.x * inv; g.y = s.y * inv; g.z = inv;
+        const float dx = g.p.x - cam.eye.x;
+        g.argb = ground_shade(shz_sqrtf(dx * dx + ey2 + dz * dz));
     }
 }
 
@@ -509,7 +522,7 @@ static void draw_ground(const Camera& cam) {
     const FieldState& f = field_state();
     float fx0, fz0, fx1, fz1;
     ground_bounds(cam, &fx0, &fz0, &fx1, &fz1);
-    int x0 = (int)floorf(fx0), z0 = (int)floorf(fz0), x1 = (int)ceilf(fx1), z1 = (int)ceilf(fz1);
+    int x0 = (int)shz_floorf(fx0), z0 = (int)shz_floorf(fz0), x1 = (int)shz_ceilf(fx1), z1 = (int)shz_ceilf(fz1);
     if (x0 < -BORDER_TILES) x0 = -BORDER_TILES;
     if (z0 < -BORDER_TILES) z0 = -BORDER_TILES;
     if (x1 > f.w + BORDER_TILES) x1 = f.w + BORDER_TILES;
@@ -553,6 +566,7 @@ static void draw_ground(const Camera& cam) {
                 const float qu[4] = { u0, u0, u1, u1 }, qv[4] = { v0, v1, v0, v1 };
                 for (int k = 0; k < 4; ++k) {
                     eng::Vert3& o = out[used + k];
+                    shz_dcache_alloc_line(&o);      // whole 32-byte line written below (no fill from RAM)
                     o.flags = k == 3 ? eng::VERT_EOL : eng::VERT;
                     o.x = q[k]->x; o.y = q[k]->y; o.z = q[k]->z;
                     o.u = qu[k]; o.v = qv[k];
@@ -575,7 +589,7 @@ static void draw_statics(const Camera& cam) {
     const float fx = g_v.focus.x, fz = g_v.focus.z;
     for (int i = 0; i < g_nstatics; ++i) {
         const StaticInst& s = g_statics[i];
-        if (fabsf(s.x - fx) > DRAW_RANGE_X || fabsf(s.z - fz) > DRAW_RANGE_Z) continue;
+        if (shz_fabsf(s.x - fx) > DRAW_RANGE_X || shz_fabsf(s.z - fz) > DRAW_RANGE_Z) continue;
         const LoadedModel& lm = g_models[s.model];
         const uint32_t* colors = s.colors;
         if (s.alpha < 0.999f) {
