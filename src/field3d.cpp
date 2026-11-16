@@ -4,6 +4,7 @@
 #include "dmf.h"
 #include "field.h"
 #include "font.h"
+#include "models.h"
 #include "render3d.h"
 #include <stdio.h>
 #include <string.h>
@@ -50,37 +51,9 @@ const float DRAW_RANGE_Z  = 18.0f;   //   before the per-instance frustum test (
 const uint32_t CLEAR_RGB  = 0x1A2B22;
 
 // ---------------------------------------------------------------------------- models
-// Every model the field can show, loaded once (romdisk/models/<name>.dmf).
-const int MAX_MODELS = 24;
-struct LoadedModel { char name[24]; dmf::Model m; ModelGfx gfx, faded; bool ok; };   // e.g. "house_plaster_r180" (18 chars)
-static LoadedModel g_models[MAX_MODELS];
-static int g_nmodels = 0;
-
-static int model_get(const char* name) {
-    for (int i = 0; i < g_nmodels; ++i)
-        if (strcmp(g_models[i].name, name) == 0) return g_models[i].ok ? i : -1;
-    if (g_nmodels >= MAX_MODELS) return -1;
-    LoadedModel& lm = g_models[g_nmodels];
-    snprintf(lm.name, sizeof lm.name, "%s", name);
-    char path[48];
-    snprintf(path, sizeof path, "/rd/models/%s.dmf", name);
-    eng::boot_log(path);
-    lm.ok = dmf::load(path, &lm.m) && gfx_init(&lm.gfx, lm.m, false);
-    ++g_nmodels;
-    return lm.ok ? g_nmodels - 1 : -1;
-}
-
-// Translucent copy of a model's materials (TR list), for houses/trees that hide the hero.
-static void make_faded(LoadedModel& lm) {
-    lm.faded = lm.gfx;
-    for (int k = 0; k < lm.m.num_mats; ++k) {
-        int f = eng::MAT_TRANSLUCENT;
-        if (lm.m.mat_flags[k] & dmf::MAT_BILINEAR) f |= eng::MAT_BILINEAR;
-        // front faces only while faded: the back walls/roof slope would stack more translucent
-        // layers into the view (the house sits between the camera and the hero, i.e. close).
-        lm.faded.single[k] = lm.faded.doubled[k] = eng::material_create(lm.m.mat_tex[k], f | eng::MAT_CULL);
-    }
-}
+// Every model the field shows comes from the shared registry (models.h): loaded once per session.
+static int model_get(const char* name) { return models_get(name); }
+static void make_faded(LoadedModel& lm) { models_make_faded(lm); }
 
 static int g_knight = -1, g_warrior = -1, g_mage = -1;
 // Enemies only turn in yaw: their lighting is baked per yaw bucket (idle-pose normals).
@@ -102,7 +75,7 @@ static eng::Material g_ground_mat = 0, g_shadow_mat = 0;
 static Clips clips_of(int mi) {
     Clips c = { -1, -1, -1, 1.0f, 1.0f, 1.0f, 1.0f };
     if (mi < 0) return c;
-    const dmf::Model& m = g_models[mi].m;
+    const dmf::Model& m = models_at(mi).m;
     c.idle = dmf::anim_find(m, "idle");
     c.walk = dmf::anim_find(m, "walk");
     c.run = dmf::anim_find(m, "run");
@@ -140,7 +113,7 @@ static const uint32_t* lit_colors(int model, float yaw_rad, const Mat34& world) 
     const int yq = (int)shz_floorf(yaw_rad * (180.0f / 3.14159265f) + 0.5f);  // 1-degree buckets
     for (int i = 0; i < g_nlit; ++i)
         if (g_lit[i].model == model && g_lit[i].yaw_q == yq) return g_lit[i].colors;
-    const dmf::Model& m = g_models[model].m;
+    const dmf::Model& m = models_at(model).m;
     if (g_color_used + m.h->num_verts > COLOR_POOL || g_nlit >= MAX_STATICS) return nullptr;
     uint32_t* c = g_color_pool + g_color_used;
     g_color_used += m.h->num_verts;
@@ -165,7 +138,7 @@ static void add_static(int model, float x, float z, float yaw_deg, float scale, 
     s.colors = lit_colors(model, yaw, s.world);
     if (!s.colors) return;
     s.x = x; s.z = z;
-    const dmf::Model& m = g_models[model].m;
+    const dmf::Model& m = models_at(model).m;
     const float ext_x = (m.h->bmax[0] - m.h->bmin[0]) * 0.5f * scale, ext_z = (m.h->bmax[2] - m.h->bmin[2]) * 0.5f * scale;
     (void)ext_x; (void)ext_z;
     s.fadeable = fadeable;
@@ -199,8 +172,8 @@ static void build_scene() {
             continue;
         }
         const bool house = strncmp(p.model, "house", 5) == 0;
-        if (house && !g_models[mi].faded.m) make_faded(g_models[mi]);
-        const dmf::Model& m = g_models[mi].m;
+        if (house && !models_at(mi).faded.m) make_faded(models_at(mi));
+        const dmf::Model& m = models_at(mi).m;
         const float r = 0.45f * ((m.h->bmax[0] - m.h->bmin[0]) > (m.h->bmax[2] - m.h->bmin[2]) ? (m.h->bmax[0] - m.h->bmin[0]) : (m.h->bmax[2] - m.h->bmin[2]));
         add_static(mi, p.x, p.y, p.rot_deg, 1.0f, house, house ? 0.0f : (r < 1.4f ? r : 1.4f));
     }
@@ -212,7 +185,7 @@ static void build_scene() {
             if (y + 1 < f.h && f.tiles[(y + 1) * f.w + x] == TILE_WALL) add_static(g_fence, (float)x + 0.5f, (float)y + 1.0f, 90.0f, 1.0f, false, 0.0f);
         }
     // trees on T tiles: yaw and size vary per tile (deterministic)
-    if (g_tree >= 0 && !g_models[g_tree].faded.m) make_faded(g_models[g_tree]);
+    if (g_tree >= 0 && !models_at(g_tree).faded.m) make_faded(models_at(g_tree));
     for (int y = 0; y < f.h; ++y)
         for (int x = 0; x < f.w; ++x) {
             if (f.tiles[y * f.w + x] != TILE_TREE) continue;
@@ -220,7 +193,7 @@ static void build_scene() {
             add_static(g_tree, (float)x + 0.5f, (float)y + 0.5f, (float)(h % 8) * 45.0f, 0.85f + 0.1f * (float)((h >> 8) % 4), true, 0.75f);
         }
     snprintf(msg, sizeof msg, "field3d: %d static instances, %d prelit colour sets, %d/%d colours, %d models, %d KiB model arena",
-             g_nstatics, g_nlit, g_color_used, COLOR_POOL, g_nmodels, dmf::loaded_bytes() / 1024);
+             g_nstatics, g_nlit, g_color_used, COLOR_POOL, models_count(), dmf::loaded_bytes() / 1024);
     eng::dbg_print(msg);
     g_scene_built = true;
 }
@@ -317,25 +290,25 @@ void field3d_init() {
         g_hero_clips = clips_of(g_knight);
         g_enemy_clips[0] = clips_of(g_warrior);
         g_enemy_clips[1] = clips_of(g_mage);
-        if (g_knight >= 0 && g_models[g_knight].m.h->num_verts <= 2048) {
+        if (g_knight >= 0 && models_at(g_knight).m.h->num_verts <= 2048) {
             static dmf::Pose pose;
             static Mat34 skin[dmf::MAX_BONES];
-            dmf::pose_sample(g_models[g_knight].m, g_hero_clips.idle, 0.0f, &pose);
-            dmf::pose_skin(g_models[g_knight].m, pose, skin);
+            dmf::pose_sample(models_at(g_knight).m, g_hero_clips.idle, 0.0f, &pose);
+            dmf::pose_skin(models_at(g_knight).m, pose, skin);
             for (int b = 0; b < HERO_YAW_BUCKETS; ++b)
-                prelight_posed(g_models[g_knight].m, skin, 6.28318531f * (float)b / HERO_YAW_BUCKETS, default_light(), g_hero_lit[b]);
+                prelight_posed(models_at(g_knight).m, skin, 6.28318531f * (float)b / HERO_YAW_BUCKETS, default_light(), g_hero_lit[b]);
             g_hero_lit_ok = true;
         }
         static uint32_t lit_pool[2][ENEMY_YAW_BUCKETS][2048];
         for (int k = 0; k < 2; ++k) {
             const int mi = k == 0 ? g_warrior : g_mage;
-            if (mi < 0 || g_models[mi].m.h->num_verts > 2048) continue;
+            if (mi < 0 || models_at(mi).m.h->num_verts > 2048) continue;
             static dmf::Pose pose;
             static Mat34 skin[dmf::MAX_BONES];
-            dmf::pose_sample(g_models[mi].m, g_enemy_clips[k].idle, 0.0f, &pose);
-            dmf::pose_skin(g_models[mi].m, pose, skin);
+            dmf::pose_sample(models_at(mi).m, g_enemy_clips[k].idle, 0.0f, &pose);
+            dmf::pose_skin(models_at(mi).m, pose, skin);
             for (int b = 0; b < ENEMY_YAW_BUCKETS; ++b) {
-                prelight_posed(g_models[mi].m, skin, 6.28318531f * (float)b / ENEMY_YAW_BUCKETS, default_light(), lit_pool[k][b]);
+                prelight_posed(models_at(mi).m, skin, 6.28318531f * (float)b / ENEMY_YAW_BUCKETS, default_light(), lit_pool[k][b]);
                 g_enemy_lit[k][b] = lit_pool[k][b];
             }
         }
@@ -413,11 +386,12 @@ void field3d_tick() {
     }
     const float hero_w = feet.z;                               // W of the hero's feet (depth)
     for (int i = 0; i < g_nstatics; ++i) {
+        if (i + 4 < g_nstatics) SHZ_PREFETCH(&g_statics[i + 4].fadeable);   // as in draw_statics
         StaticInst& s = g_statics[i];
         if (!s.fadeable) continue;
         bool hides = false;
         if (hero_ok && shz_fabsf(s.x - hx) < 8.0f && s.z > hz - 1.0f && s.z - hz < 12.0f) {
-            const dmf::Model& m = g_models[s.model].m;
+            const dmf::Model& m = models_at(s.model).m;
             float x0 = 1e9f, x1 = -1e9f, y0 = 1e9f, y1 = -1e9f, wmin = 1e9f;
             bool behind_cam = false;
             // XMTRX = proj_view * world: the 8 box corners are one FTRV each
@@ -588,9 +562,13 @@ static void draw_ground(const Camera& cam) {
 static void draw_statics(const Camera& cam) {
     const float fx = g_v.focus.x, fz = g_v.focus.z;
     for (int i = 0; i < g_nstatics; ++i) {
+        // Every instance is visited each frame (~180 x 76 bytes, more than a third of the operand
+        // cache, evicted by the frame's vertex traffic): request the one four ahead (PREF), as most
+        // iterations end at the range test below after a few instructions.
+        if (i + 4 < g_nstatics) SHZ_PREFETCH(&g_statics[i + 4].x);
         const StaticInst& s = g_statics[i];
         if (shz_fabsf(s.x - fx) > DRAW_RANGE_X || shz_fabsf(s.z - fz) > DRAW_RANGE_Z) continue;
-        const LoadedModel& lm = g_models[s.model];
+        const LoadedModel& lm = models_at(s.model);
         const uint32_t* colors = s.colors;
         if (s.alpha < 0.999f) {
             // faded (hiding the hero): same prelit colours with the alpha replaced, TR list
@@ -610,6 +588,7 @@ static void draw_statics(const Camera& cam) {
 void field3d_draw(int hero_hp, int hero_hp_max) {
     const FieldState& f = field_state();
     stats_reset();
+    eng::set_clear_color(CLEAR_RGB);              // the battle sets its sky colour; restore ours
     Camera cam;
     field_camera(&cam);
     const Light light = default_light();
@@ -629,10 +608,10 @@ void field3d_draw(int hero_hp, int hero_hp_max) {
         float x, z;
         entity_world(i, &x, &z);
         if (mi >= 0) {
-            locomotion_pose(g_models[mi].m, g_enemy_clips[kind], g_v.ent[i], &pose);
-            dmf::pose_skin(g_models[mi].m, pose, skin);
+            locomotion_pose(models_at(mi).m, g_enemy_clips[kind], g_v.ent[i], &pose);
+            dmf::pose_skin(models_at(mi).m, pose, skin);
             const int bucket = yaw_bucket(g_v.ent_yaw[i], ENEMY_YAW_BUCKETS);
-            draw_model(cam, light, g_models[mi].gfx, mat_trs_y(v3(x, 0, z), g_v.ent_yaw[i], ENEMY_SCALE, ENEMY_SCALE, ENEMY_SCALE), skin,
+            draw_model(cam, light, models_at(mi).gfx, mat_trs_y(v3(x, 0, z), g_v.ent_yaw[i], ENEMY_SCALE, ENEMY_SCALE, ENEMY_SCALE), skin,
                        0xFFFFFFFFu, g_enemy_lit[kind][bucket]);
         }
         draw_blob_shadow(cam, g_shadow_mat, v3(x, 0, z), 0.55f * ENEMY_SCALE / 0.8f, (int)SHADOW_ALPHA);
@@ -642,11 +621,11 @@ void field3d_draw(int hero_hp, int hero_hp_max) {
     float hx, hz;
     hero_world(f.hero, &hx, &hz);
     if (g_knight >= 0) {
-        const dmf::Model& m = g_models[g_knight].m;
+        const dmf::Model& m = models_at(g_knight).m;
         locomotion_pose(m, g_hero_clips, g_v.hero, &pose);
         dmf::pose_skin(m, pose, skin);
         const uint32_t* lit = (g_hero_lit_ok && HERO_DYN_LIGHT < 0.5f) ? g_hero_lit[yaw_bucket(g_v.yaw, HERO_YAW_BUCKETS)] : nullptr;
-        draw_model(cam, light, g_models[g_knight].gfx, mat_trs_y(v3(hx, 0, hz), g_v.yaw, HERO_SCALE, HERO_SCALE, HERO_SCALE), skin,
+        draw_model(cam, light, models_at(g_knight).gfx, mat_trs_y(v3(hx, 0, hz), g_v.yaw, HERO_SCALE, HERO_SCALE, HERO_SCALE), skin,
                    0xFFFFFFFFu, lit);
     }
     draw_blob_shadow(cam, g_shadow_mat, v3(hx, 0, hz), 0.62f * HERO_SCALE / 0.8f, (int)SHADOW_ALPHA);

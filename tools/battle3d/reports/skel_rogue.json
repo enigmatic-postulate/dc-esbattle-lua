@@ -1,0 +1,104 @@
+{
+ "source": "Skeleton_Rogue.fbx",
+ "budget": 800,
+ "parts": [
+  {
+   "part": "armleft",
+   "source_tris": 692,
+   "after_dissolve": 668,
+   "tris": 104,
+   "target": 105,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "armright",
+   "source_tris": 692,
+   "after_dissolve": 668,
+   "tris": 104,
+   "target": 105,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "body",
+   "source_tris": 1250,
+   "after_dissolve": 1240,
+   "tris": 188,
+   "target": 189,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "cape",
+   "source_tris": 84,
+   "after_dissolve": 76,
+   "tris": 13,
+   "target": 13,
+   "glow": false,
+   "double_sided": true
+  },
+  {
+   "part": "eyes",
+   "source_tris": 132,
+   "after_dissolve": 132,
+   "tris": 20,
+   "target": 20,
+   "glow": true,
+   "double_sided": false
+  },
+  {
+   "part": "head",
+   "source_tris": 414,
+   "after_dissolve": 404,
+   "tris": 62,
+   "target": 63,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "hood",
+   "source_tris": 490,
+   "after_dissolve": 490,
+   "tris": 74,
+   "target": 74,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "jaw",
+   "source_tris": 124,
+   "after_dissolve": 124,
+   "tris": 18,
+   "target": 19,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "legleft",
+   "source_tris": 700,
+   "after_dissolve": 680,
+   "tris": 106,
+   "target": 106,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "legright",
+   "source_tris": 700,
+   "after_dissolve": 680,
+   "tris": 106,
+   "target": 106,
+   "glow": false,
+   "double_sided": false
+  }
+ ],
+ "out": "skel_rogue.dmf",
+ "tris": 795,
+ "verts": 1027,
+ "groups": 36,
+ "strips": 354,
+ "verts_per_tri": 1.891,
+ "bytes": 47616,
+ "source_tris": 5278
+}

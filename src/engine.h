@@ -48,6 +48,7 @@ enum MaterialFlags {
     MAT_TRANSLUCENT = 1,   // TR list (alpha from vertex colour x texel), else OP list
     MAT_BILINEAR    = 2,   // else nearest
     MAT_CULL        = 4,   // cull back faces (front = counter-clockwise on screen; see render3d.cpp)
+    MAT_ADDITIVE    = 8,   // TR list, additive blending: dst + src * src_alpha (glows, sparks, fire)
 };
 // texture: a Sprite handle (PNG or memory texture) or 0 for untextured (vertex colour only).
 Material material_create(Sprite texture, int flags);

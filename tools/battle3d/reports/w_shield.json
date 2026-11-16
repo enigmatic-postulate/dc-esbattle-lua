@@ -1,0 +1,23 @@
+{
+ "source": "shield_badge_color.fbx",
+ "budget": 200,
+ "parts": [
+  {
+   "part": "shield_badge_color",
+   "source_tris": 262,
+   "after_dissolve": 220,
+   "tris": 200,
+   "target": 200,
+   "glow": false,
+   "double_sided": false
+  }
+ ],
+ "out": "w_shield.dmf",
+ "tris": 200,
+ "verts": 225,
+ "groups": 1,
+ "strips": 61,
+ "verts_per_tri": 1.61,
+ "bytes": 16416,
+ "source_tris": 262
+}

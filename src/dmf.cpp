@@ -199,11 +199,37 @@ static void resolve_materials(Model* m) {
     }
 }
 
-bool load(const char* path, Model* out) {
+// Embedded textures already uploaded, by content: models converted from one KayKit atlas (the
+// skeletons) carry byte-identical textures and share one VRAM copy and one sprite slot.
+struct EmbeddedTex { const uint16_t* texels; uint16_t w, h, fmt; uint32_t hash; eng::Sprite spr; };
+static EmbeddedTex g_embedded[16];
+static int g_nembedded = 0;
+
+static uint32_t fnv1a(const uint16_t* p, int n) {
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < n; ++i) { h = (h ^ (p[i] & 0xFFu)) * 16777619u; h = (h ^ (p[i] >> 8)) * 16777619u; }
+    return h;
+}
+
+static eng::Sprite upload_embedded(const TexHeader* t, const uint16_t* texels) {
+    const int n = t->w * t->h;
+    const uint32_t h = fnv1a(texels, n);
+    for (int i = 0; i < g_nembedded; ++i) {
+        const EmbeddedTex& e = g_embedded[i];
+        if (e.hash == h && e.w == t->w && e.h == t->h && e.fmt == t->format && memcmp(e.texels, texels, (size_t)n * 2) == 0)
+            return e.spr;
+    }
+    eng::Sprite s = eng::texture_create(texels, t->w, t->h, t->format);
+    if (s && g_nembedded < (int)(sizeof g_embedded / sizeof g_embedded[0]))
+        g_embedded[g_nembedded++] = EmbeddedTex{ texels, t->w, t->h, t->format, h, s };
+    return s;
+}
+
+bool load(const char* path, Model* out, bool upload_texture) {
     char msg[160];
-    int room = ARENA_BYTES - g_arena_used;
+    int room = ARENA_BYTES - g_arena_used - LOOKAHEAD_PAD;
     uint8_t* dst = g_arena + g_arena_used;
-    int n = eng::file_read(path, (char*)dst, room);     // NUL-terminates: needs one spare byte
+    int n = room > 0 ? eng::file_read(path, (char*)dst, room) : -1;   // NUL-terminates: needs one spare byte
     if (n < 0) {
         snprintf(msg, sizeof msg, "dmf: cannot read %s (missing, or larger than the %d free arena bytes)", path, room - 1);
         eng::dbg_print(msg);
@@ -215,9 +241,13 @@ bool load(const char* path, Model* out) {
         eng::dbg_print(msg);
         return false;
     }
-    g_arena_used += (n + 31) & ~31;
-    if (out->tex) {
-        out->texture = eng::texture_create(out->texels, out->tex->w, out->tex->h, out->tex->format);
+    // The image is followed by at least LOOKAHEAD_PAD zero bytes (see dmf.h); a rejected file may
+    // have left other bytes there.
+    const int image = (n + 31) & ~31;
+    memset(dst + n, 0, (size_t)(image - n + LOOKAHEAD_PAD));
+    g_arena_used += image + LOOKAHEAD_PAD;
+    if (out->tex && upload_texture) {
+        out->texture = upload_embedded(out->tex, out->texels);
         if (!out->texture) {
             snprintf(msg, sizeof msg, "dmf: %s texture upload failed", path);
             eng::dbg_print(msg);
@@ -279,6 +309,12 @@ void pose_sample(const Model& m, int k, float t_sec, Pose* p) {
     const int16_t* q0 = (const int16_t*)(d0 + 12);
     const int16_t* q1 = (const int16_t*)(d1 + 12);
     for (int i = 0; i < nb; ++i) {
+        // Neither the keyframes (8 bytes per bone) nor the bone records (96 bytes each) are in the
+        // operand cache at this point of a frame: request the bone record two ahead and each
+        // keyframe line one line early (PREF). The keyframe lookahead stays inside the model
+        // image or dmf::load()'s padding after it.
+        if (i + 2 < nb) SHZ_PREFETCH(&m.bones[i + 2].bind_t);
+        if (!(i & 3)) { SHZ_PREFETCH(q0 + 4 * i + 16); SHZ_PREFETCH(q1 + 4 * i + 16); }
         p->q[i] = r3d::quat_nlerp(q16(q0 + 4 * i), q16(q1 + 4 * i), w);
         const Bone& b = m.bones[i];
         p->t[i] = r3d::v3(b.bind_t[0], b.bind_t[1], b.bind_t[2]);
@@ -303,7 +339,22 @@ void pose_blend(Pose* a, const Pose& b, int nb, float w) {
 // is 12 floats, row-major - the Mat34 layout.
 void pose_skin(const Model& m, const Pose& p, r3d::Mat34* skin) {
     r3d::Mat34 world[MAX_BONES];
-    for (int i = 0; i < m.h->num_bones; ++i) {
+    pose_skin_world(m, p, skin, world);
+}
+
+void pose_skin_world(const Model& m, const Pose& p, r3d::Mat34* skin, r3d::Mat34* world) {
+    const int nb = m.h->num_bones;
+    for (int i = 0; i < nb; ++i) {
+        if (i + 1 < nb) {                                            // next bone's record (PREF)
+            SHZ_PREFETCH(&m.bones[i + 1].parent);
+            SHZ_PREFETCH(&m.bones[i + 1].inv_bind[0]);
+            SHZ_PREFETCH(&m.bones[i + 1].inv_bind[11]);
+        }
+        // This bone's two 48-byte results: their lines are not in the cache (the previous model's
+        // vertices went through it), and a store that misses first reads the line. PREF starts
+        // those reads now, while XMTRX builds the matrices below.
+        SHZ_PREFETCH(&world[i].m[0][0]); SHZ_PREFETCH(&world[i].m[2][3]);
+        SHZ_PREFETCH(&skin[i].m[0][0]);  SHZ_PREFETCH(&skin[i].m[2][3]);
         const Bone& b = m.bones[i];
         if (b.parent < 0) {
             shz_xmtrx_init_rotation_quat(p.q[i]);                    // XMTRX = R

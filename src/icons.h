@@ -9,7 +9,7 @@ enum Icon {
     ICON_SWORD, ICON_FLAME, ICON_SHIELD, ICON_TARGET,
     ICON_ENEMY_TURN, ICON_SPARK, ICON_HURT, ICON_PAD_A,
     ICON_PAD_LEFT, ICON_PAD_RIGHT, ICON_PAD_UP, ICON_PAD_DOWN,
-    ICON_PAD_START, ICON_PAD_B, ICON_PAD_Y, ICON_COUNT
+    ICON_PAD_START, ICON_PAD_B, ICON_PAD_Y, ICON_POTION, ICON_COUNT
 };
 
 // Icon art is 16x16 px. Draw at multiples of 16 (16/32/48) to keep pixels crisp.
@@ -17,5 +17,7 @@ const real ICON_1X = 16, ICON_2X = 32, ICON_3X = 48;
 
 void icons_init();
 void icon_draw(Icon icon, real cx, real cy, real size);
+// The same, modulated by argb (tint and alpha), at an explicit depth (0 = automatic order).
+void icon_draw_tint(Icon icon, real cx, real cy, real size, uint32_t argb, float z = 0.0f);
 
 } // namespace bt

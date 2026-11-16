@@ -63,6 +63,9 @@ struct Entity {
     int        pdx, pdy, plen, ppos, psign, pwait;
     int        home_x, home_y;
     Dir        home_dir;
+    char       after[2][16];        // `after a [b]`: dormant (not drawn, not touchable) until these are defeated
+    int        n_after;
+    bool       dormant;
 };
 
 // A placed 3D model from a map `prop` line. The logic only uses the footprint (solid tiles);

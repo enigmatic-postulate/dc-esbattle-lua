@@ -21,6 +21,8 @@ static const char* const RING_NAME[3] = { "ATTACK", "FIRE", "GUARD" };
 
 static const eng::Key UB_KEY[UB_COUNT] = { eng::KEY_FIRE, eng::KEY_LEFT, eng::KEY_RIGHT, eng::KEY_B, eng::KEY_Y };
 
+int ui_command_count() { return rules().potions ? 4 : 3; }
+
 void ui_init(BattleCtx& ctx) {
     ctx.ui.bob_ticks = 0;
     probe_init(ctx);
@@ -53,9 +55,11 @@ bool ui_update(BattleCtx& ctx, Actor& user, PendingAction& out) {
     if (!ctx.active || ctx.active->team != Team::Player) return false;
 
     switch (ui.state) {
-    case UiState::Home:
-        if (click(UB_LEFT))       { ui.home_i = (ui.home_i + 2) % 3; }
-        else if (click(UB_RIGHT)) { ui.home_i = (ui.home_i + 1) % 3; }
+    case UiState::Home: {
+        // 3 commands (Attack, Fire, Guard), or 4 with the Potion (GDD 11.1; rules().potions)
+        const int n = ui_command_count();
+        if (click(UB_LEFT))       { ui.home_i = (ui.home_i + n - 1) % n; }
+        else if (click(UB_RIGHT)) { ui.home_i = (ui.home_i + 1) % n; }
 
         if (click(UB_Y)) { ui.home_i = 2; return false; }
 
@@ -67,15 +71,22 @@ bool ui_update(BattleCtx& ctx, Actor& user, PendingAction& out) {
             } else if (ui.home_i == 1) {
                 ui.state = UiState::TargetAll;            // confirm step: every enemy is marked
                 ui.target_entry_lock = TARGET_ENTRY_LOCK;
-            } else {
+            } else if (ui.home_i == 2) {
                 out = PendingAction();
                 out.skill = &skill(SK_GUARD);
+                out.targets.push(&user);
+                out.cursor_index = 0;
+                return true;
+            } else if (ctx.potions > 0) {                 // Potion: greyed (A does nothing) when none are left
+                out = PendingAction();
+                out.skill = &skill(SK_POTION);
                 out.targets.push(&user);
                 out.cursor_index = 0;
                 return true;
             }
         }
         return false;
+    }
 
     case UiState::Target: {
         if (click(UB_B)) { ui.state = UiState::Home; ui.target_entry_lock = 0; return false; }
@@ -120,8 +131,8 @@ static void draw_marker(const BattleCtx& ctx, const Actor& a, real bob, Icon ico
 }
 
 // Bottom prompt bar: [glyph] LABEL pairs, so every available button is visible.
-struct Prompt { Icon a, b; const char* text; };
-static void draw_prompts(const Prompt* p, int n) {
+typedef UiPrompt Prompt;
+void ui_draw_prompts(const UiPrompt* p, int n) {
     const real y = 446, x0 = 250;
     real x = x0;
     for (int i = 0; i < n; ++i) {
@@ -163,13 +174,13 @@ void ui_draw(BattleCtx& ctx) {
             real size = (i == ui.home_i) ? ICON_3X : ICON_2X;   // selected command is enlarged
             icon_draw(RING_ICON[i], base_x + (i - (real)1.0) * RING_SPACING, base_y, size);
         }
-        font_draw_centered(base_x, base_y - 48, RING_NAME[ui.home_i], 2, 0xFFFFCD75);
+        font_draw_centered(base_x, base_y - 48, ui.home_i < 3 ? RING_NAME[ui.home_i] : "POTION", 2, 0xFFFFCD75);
         if (ui.home_i == 1)   // preview: small markers over every enemy Fire would hit
             for (Actor* e : enemies) draw_marker(ctx, *e, 0, ICON_TARGET, ICON_1X);
         static const Prompt P[] = { { ICON_PAD_A, ICON_COUNT, "SELECT" },
                                     { ICON_PAD_LEFT, ICON_PAD_RIGHT, "CHOOSE" },
                                     { ICON_PAD_Y, ICON_COUNT, "GUARD" } };
-        draw_prompts(P, 3);
+        ui_draw_prompts(P, 3);
         return;
     }
 
@@ -185,13 +196,13 @@ void ui_draw(BattleCtx& ctx) {
         static const Prompt P[] = { { ICON_PAD_A, ICON_COUNT, "ATTACK" },
                                     { ICON_PAD_LEFT, ICON_PAD_RIGHT, "TARGET" },
                                     { ICON_PAD_B, ICON_COUNT, "BACK" } };
-        draw_prompts(P, 3);
+        ui_draw_prompts(P, 3);
     } else {
         for (Actor* e : enemies) draw_marker(ctx, *e, bob, ICON_TARGET);   // every enemy will be hit
         font_draw_centered(enemies.empty() ? 480 : enemies[0]->x, 100, "ALL ENEMIES", 2, 0xFFEF7D57);
         static const Prompt P[] = { { ICON_PAD_A, ICON_COUNT, "CAST FIRE" },
                                     { ICON_PAD_B, ICON_COUNT, "BACK" } };
-        draw_prompts(P, 2);
+        ui_draw_prompts(P, 2);
     }
 }
 

@@ -12,7 +12,12 @@
 //   * each distinct vertex is transformed once into a scratch array laid out exactly like the
 //     engine's 32-byte vertex, then the strips (already built by the converter) are copied into the
 //     engine's vertex arena, one 32-byte cache line per vertex claimed with MOVCA.L
-//     (shz_dcache_alloc_line) so the write does not first read the line from RAM.
+//     (shz_dcache_alloc_line) so the write does not first read the line from RAM;
+//   * memory: every buffer these loops stream (model vertices, the transform scratch, the arena) is
+//     several times the 16 KiB operand cache, so the loops that index them request the line they
+//     will need two vertices later with PREF (SHZ_PREFETCH) - a software pipeline in the strip
+//     loops, which read vertices in strip order - and claim whole lines they are about to write
+//     with MOVCA.L. tests/sh4zam/shcache.c measures the effect (docs/SLICE_SH4ZAM.md, §8).
 // Hardware math is all SH4ZAM (see math3d.h); this file contains no assembly.
 #include "render3d.h"
 #include <stddef.h>
@@ -27,6 +32,7 @@ static bool g_strip_culling = true;
 void set_strip_culling(bool on) { g_strip_culling = on; }
 void stats_reset() { memset(&g_stats, 0, sizeof g_stats); }
 const Stats& stats() { return g_stats; }
+void stats_add(int verts_out, int tris) { g_stats.verts_out += verts_out; g_stats.tris += tris; }
 
 Light default_light() {
     Light l;
@@ -66,7 +72,16 @@ const int MAX_XV = 4096;
 // Transformed vertices, shaped exactly like eng::Vert3, one 32-byte cache line each.
 alignas(32) static eng::Vert3 g_xv[MAX_XV];
 struct XT { float X, Y, W, ndl; };           // first-bone partial result for two-bone groups
-static XT g_xt[MAX_XV];
+// Two entries per 32-byte cache line: draw_model's first pass claims each line with MOVCA.L
+// (shz_dcache_alloc_line) before writing it - both halves are written before either is read, or
+// belong to a group whose second pass is already done.
+alignas(32) static XT g_xt[MAX_XV];
+static_assert(sizeof(XT) == 16, "two XT entries per cache line");
+
+// MOVCA.L for the g_xt line that starts at t (called for every entry; only line starts allocate).
+static inline void xt_claim(XT* t) {
+    if (!(reinterpret_cast<uintptr_t>(t) & 31)) shz_dcache_alloc_line(t);
+}
 
 typedef uint32_t __attribute__((may_alias)) u32a;   // word copies of float data without aliasing UB
 
@@ -118,7 +133,7 @@ static int sphere_vis(const Camera& cam, Vec3 centre_world, float r) {
 // Bounding spheres of every strip of the static models (computed once at load). Load-time and
 // conservative (a culling bound), so the radius keeps the exact sqrtf rather than the FSRRA one.
 const int MAX_STRIP_SPHERES = 16384;
-static float g_strip_sph[MAX_STRIP_SPHERES * 4];
+static float g_strip_sph[MAX_STRIP_SPHERES * 4 + 16];       // + room for draw_static's lookahead
 static int g_strip_sph_used = 0;
 
 static const float* compute_strip_spheres(const dmf::Model& m) {
@@ -190,6 +205,7 @@ static bool emit_batches(const ModelGfx& g, bool cull_offscreen = false) {
         int tris = 0;
         while (w < end) {
             const int len = *w++;
+            SHZ_PREFETCH(w + 16);                           // the strip words, 32 bytes ahead
             if (cull_offscreen) {
                 int l = 0, r = 0, t = 0, b = 0;
                 for (int j = 0; j < len; ++j) {
@@ -199,14 +215,31 @@ static bool emit_batches(const ModelGfx& g, bool cull_offscreen = false) {
                 if (l == len || r == len || t == len || b == len) { w += len; continue; }
             }
             tris += len - 2;
-            for (int j = 0; j < len; ++j, ++o) {
-                // one 32-byte cache line per vertex: MOVCA.L allocates it without a read from RAM
-                // (all 8 words are written below), then eight word moves
-                const u32a* sv32 = reinterpret_cast<const u32a*>(&g_xv[w[j]]);
+            // One 32-byte cache line per vertex: MOVCA.L allocates it without a read from RAM
+            // (all 8 words are written), then eight word moves.
+            auto copy = [&](const eng::Vert3* src) {
+                const u32a* sv32 = reinterpret_cast<const u32a*>(src);
                 u32a* d = reinterpret_cast<u32a*>(o);
                 shz_dcache_alloc_line(o);
                 d[0] = eng::VERT; d[1] = sv32[1]; d[2] = sv32[2]; d[3] = sv32[3];
                 d[4] = sv32[4]; d[5] = sv32[5]; d[6] = sv32[6]; d[7] = 0;
+                ++o;
+            };
+            // The strip reads g_xv in index order, i.e. all over a buffer several times the size
+            // of the operand cache (the Knight's is 51 KiB), so without help nearly every copy
+            // would wait for a line fill. Software pipeline: `a` is the vertex being copied, `b`
+            // the next; each step computes the source two strip positions ahead, requests its line
+            // (PREF), copies `a` and shifts. The first vertex was requested by the previous strip's
+            // lookahead, which runs on across the length word into this strip; past the last strip
+            // it reads the zero padding dmf::load() leaves after every model (a harmless request).
+            const eng::Vert3* a = &g_xv[w[0]];
+            const eng::Vert3* b = &g_xv[w[1]];
+            SHZ_PREFETCH(b);
+            for (int j = 0; j < len; ++j) {
+                const eng::Vert3* c = &g_xv[w[j + 2]];
+                SHZ_PREFETCH(c);
+                copy(a);
+                a = b; b = c;
             }
             o[-1].flags = eng::VERT_EOL;
             w += len;
@@ -223,12 +256,18 @@ static bool emit_batches(const ModelGfx& g, bool cull_offscreen = false) {
 bool draw_model(const Camera& cam, const Light& light, const ModelGfx& g, const Mat34& world, const Mat34* skin, uint32_t tint,
                 const uint32_t* prelit) {
     if (!g.m || !g.m->h) return false;
+    // animated limbs can leave the bind-pose sphere a little: 25 % margin
+    return draw_model_in(cam, light, g, world, skin, mat_point(world, g.m->centre), g.m->radius * max_scale(world) * 1.25f, tint, prelit);
+}
+
+bool draw_model_in(const Camera& cam, const Light& light, const ModelGfx& g, const Mat34& world, const Mat34* skin,
+                   Vec3 bound_centre, float bound_radius, uint32_t tint, const uint32_t* prelit) {
+    if (!g.m || !g.m->h) return false;
     const dmf::Model& m = *g.m;
     ++g_stats.models;
     const int nv = m.h->num_verts;
     if (nv > MAX_XV) return false;
-    // animated limbs can leave the bind-pose sphere a little: 25 % margin
-    int vis = sphere_vis(cam, mat_point(world, m.centre), m.radius * max_scale(world) * 1.25f);
+    int vis = sphere_vis(cam, bound_centre, bound_radius);
     if (vis <= 0) { ++g_stats.models_culled; return false; }   // -1: too close to clip per-triangle; skip
 
     const int nb = skin ? m.h->num_bones : 0;
@@ -293,6 +332,7 @@ bool draw_model(const Camera& cam, const Light& light, const ModelGfx& g, const 
             const uint32_t* pc = prelit + gr.first;
             for (int i = 0; i < count; ++i, ++v, ++o) {
                 SHZ_PREFETCH(v + 2);                                    // vertices are 32-byte lines, read in order
+                SHZ_PREFETCH(pc + i + 16);                              // baked colours: 8 per line, two lines ahead
                 const Vec3 s = xmtrx_point(v->x, v->y, v->z);          // (X', Y', W): one FTRV
                 const float inv = inv_w(s.z < near_w ? near_w : s.z);
                 put_vert(o, s.x * inv, s.y * inv, inv, fbits(v->u), fbits(v->v), pc[i]);
@@ -313,6 +353,7 @@ bool draw_model(const Camera& cam, const Light& light, const ModelGfx& g, const 
             for (int i = 0; i < count; ++i, ++v, ++t) {      // pass 1: bone0
                 SHZ_PREFETCH(v + 2);
                 const Vec3 s = xmtrx_point(v->x, v->y, v->z);
+                xt_claim(t);
                 t->X = s.x; t->Y = s.y; t->W = s.z;
             }
             xmtrx_load(xf[gr.bone1]);
@@ -320,6 +361,9 @@ bool draw_model(const Camera& cam, const Light& light, const ModelGfx& g, const 
             t = g_xt + gr.first;
             const uint32_t* pc = prelit + gr.first;
             for (int i = 0; i < count; ++i, ++v, ++t, ++o) { // pass 2: bone1, blend by w0
+                SHZ_PREFETCH(v + 2);                         // the group's vertices again, and pass 1's
+                SHZ_PREFETCH(t + 4);                         // results, two lines ahead
+                SHZ_PREFETCH(pc + i + 16);
                 const Vec3 s = xmtrx_point(v->x, v->y, v->z);
                 const float w0 = (float)v->w0 * (1.0f / 255.0f);
                 const float X = s.x + (t->X - s.x) * w0, Y = s.y + (t->Y - s.y) * w0;
@@ -334,6 +378,7 @@ bool draw_model(const Camera& cam, const Light& light, const ModelGfx& g, const 
         for (int i = 0; i < count; ++i, ++v, ++t) {          // pass 1: bone0
             SHZ_PREFETCH(v + 2);
             const Vec3 s = xmtrx_point(v->x, v->y, v->z);
+            xt_claim(t);
             t->X = s.x; t->Y = s.y; t->W = s.z;
             t->ndl = shz_dot6f((float)v->nx, (float)v->ny, (float)v->nz, la.x, la.y, la.z);
         }
@@ -342,6 +387,8 @@ bool draw_model(const Camera& cam, const Light& light, const ModelGfx& g, const 
         v = m.verts + gr.first;
         t = g_xt + gr.first;
         for (int i = 0; i < count; ++i, ++v, ++t, ++o) {    // pass 2: bone1, blend by w0
+            SHZ_PREFETCH(v + 2);
+            SHZ_PREFETCH(t + 4);
             const Vec3 s = xmtrx_point(v->x, v->y, v->z);
             const float w0 = (float)v->w0 * (1.0f / 255.0f);
             const float n1 = shz_dot6f((float)v->nx, (float)v->ny, (float)v->nz, lbb.x, lbb.y, lbb.z);
@@ -455,14 +502,21 @@ static int box_vis(const Camera& cam, const dmf::Model& m, const Mat34& world, i
 }
 
 void prelight_posed(const dmf::Model& m, const Mat34* skin, float yaw, const Light& light, uint32_t* colors) {
+    prelight_posed_range(m, skin, yaw, light, colors, 0, m.h->num_verts);
+}
+
+void prelight_posed_range(const dmf::Model& m, const Mat34* skin, float yaw, const Light& light, uint32_t* colors,
+                          int v_begin, int v_end) {
     const Mat34 rot = mat_trs_y(v3(0, 0, 0), yaw, 1, 1, 1);
     static const float white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
     for (int gi = 0; gi < m.h->num_groups; ++gi) {
         const dmf::Group& gr = m.groups[gi];
+        const int g0 = gr.first > v_begin ? gr.first : v_begin, g1 = gr.first + gr.count < v_end ? gr.first + gr.count : v_end;
+        if (g0 >= g1) continue;                                      // group outside the range
         const bool two = gr.bone1 != dmf::NO_BONE;
         const Mat34 a = skin ? mat_mul(rot, skin[gr.bone0]) : rot;
         const Mat34 b = (skin && two) ? mat_mul(rot, skin[gr.bone1]) : a;
-        for (int i = gr.first; i < gr.first + gr.count; ++i) {
+        for (int i = g0; i < g1; ++i) {
             const dmf::Vertex& v = m.verts[i];
             const Vec3 n = v3((float)v.nx, (float)v.ny, (float)v.nz);
             const float w0 = two ? (float)v.w0 * (1.0f / 255.0f) : 1.0f;
@@ -520,7 +574,9 @@ bool draw_static(const Camera& cam, const ModelGfx& g, const Mat34& world, const
             int tris = 0;
             while (w < end) {
                 const int len = *w++;
+                SHZ_PREFETCH(w + 16);                        // the strip words, 32 bytes ahead
                 if (sph) {
+                    SHZ_PREFETCH(sph + 16);                  // strip spheres: 16 bytes each, two lines ahead (the array has room)
                     const Vec3 c = xmtrx_point(sph[0], sph[1], sph[2]);          // (X', Y', W) of the centre
                     const float rx = sph[3] * kx, ry = sph[3] * ky;
                     sph += 4;
@@ -534,12 +590,23 @@ bool draw_static(const Camera& cam, const ModelGfx& g, const Mat34& world, const
                 }
                 g_stats.verts_xf += len;
                 tris += len - 2;
-                for (int j = 0; j < len; ++j, ++o) {
-                    const int idx = w[j];
-                    const dmf::Vertex* v = verts + idx;
+                auto emit = [&](const dmf::Vertex* v, uint32_t col) {
                     const Vec3 s = xmtrx_point(v->x, v->y, v->z);     // (X', Y', W): one FTRV
                     const float inv = inv_w(s.z);
-                    put_vert(o, s.x * inv, s.y * inv, inv, fbits(v->u), fbits(v->v), cols[idx]);
+                    put_vert(o, s.x * inv, s.y * inv, inv, fbits(v->u), fbits(v->v), col);
+                    ++o;
+                };
+                // The strip indexes the model's vertices (32-byte lines, e.g. 64 KiB for a house):
+                // the same software pipeline as emit_batches - the vertex two strip positions ahead
+                // is requested (PREF) before the current one is transformed.
+                const dmf::Vertex* a = verts + w[0];
+                const dmf::Vertex* b = verts + w[1];
+                SHZ_PREFETCH(b);
+                for (int j = 0; j < len; ++j) {
+                    const dmf::Vertex* c = verts + w[j + 2];
+                    SHZ_PREFETCH(c);
+                    emit(a, cols[w[j]]);
+                    a = b; b = c;
                 }
                 w += len;
                 o[-1].flags = eng::VERT_EOL;
@@ -656,6 +723,82 @@ void draw_blob_shadow(const Camera& cam, eng::Material mat, Vec3 c, float radius
         }
     }
     eng::vtx_end(mat, used);
+}
+
+} // namespace r3d
+
+namespace r3d {
+
+// ---------------------------------------------------------------------------- slice 3D-4 helpers
+bool project(const Camera& cam, Vec3 p, float* sx, float* sy, float* z) {
+    const Vec3 s = mat_point(cam.screen, p);               // (X', Y', W)
+    if (s.z < cam.near_w) return false;
+    const float inv = inv_w(s.z);
+    *sx = s.x * inv; *sy = s.y * inv;
+    if (z) *z = inv;
+    return true;
+}
+
+// Screen-aligned quads centred on world points: one FTRV + one FSRRA per billboard, 4 vertices
+// (one strip) each; billboards whose centre is behind the near plane are skipped. Sizes are world
+// units (scaled by focal / W), rot rotates the quad on screen.
+int draw_billboards(const Camera& cam, eng::Material mat, const Billboard* b, int n) {
+    if (n <= 0) return 0;
+    eng::Vert3* out = eng::vtx_begin(n * 4);
+    if (!out) return 0;
+    xmtrx_load(cam.screen);
+    int used = 0, drawn = 0;
+    for (int i = 0; i < n; ++i) {
+        const Billboard& q = b[i];
+        const Vec3 s = xmtrx_point(q.p);
+        if (s.z < cam.near_w) continue;
+        const float inv = inv_w(s.z);
+        const float cx = s.x * inv, cy = s.y * inv;
+        const float hw = 0.5f * q.w * cam.focal * inv, hh = 0.5f * q.h * cam.focal * inv;
+        if (cx + hw < 0.0f || cx - hw > 640.0f || cy + hh < 0.0f || cy - hh > 480.0f) continue;
+        float c = 1.0f, sn = 0.0f;
+        if (q.rot != 0.0f) { const shz_sincos_t r = shz_sincosf(q.rot); c = r.cos; sn = r.sin; }
+        const float z = inv * (1.0f + q.z_bias);
+        // strip order: top-left, bottom-left, top-right, bottom-right (counter-clockwise on screen)
+        const float lx[4] = { -hw, -hw, hw, hw }, ly[4] = { -hh, hh, -hh, hh };
+        const float u[4] = { q.u0, q.u0, q.u1, q.u1 }, v[4] = { q.v0, q.v1, q.v0, q.v1 };
+        for (int k = 0; k < 4; ++k) {
+            eng::Vert3& o = out[used + k];
+            shz_dcache_alloc_line(&o);                      // whole 32-byte line written below
+            o.flags = k == 3 ? eng::VERT_EOL : eng::VERT;
+            o.x = cx + lx[k] * c - ly[k] * sn; o.y = cy + lx[k] * sn + ly[k] * c; o.z = z;
+            o.u = u[k]; o.v = v[k]; o.argb = q.argb; o.oargb = 0;
+        }
+        used += 4;
+        ++drawn;
+    }
+    eng::vtx_end(mat, used);
+    g_stats.verts_out += used;
+    g_stats.tris += 2 * drawn;
+    return drawn;
+}
+
+// Flat quads on a horizontal plane (decals: selection rings, scorch marks), clipped against the
+// near plane (emit_poly). Each quad: centre, half size, rotation about +Y, uv rect, colour.
+int draw_ground_quads(const Camera& cam, eng::Material mat, const GroundQuad* q, int n) {
+    if (n <= 0) return 0;
+    eng::Vert3* out = eng::vtx_begin(n * 8);
+    if (!out) return 0;
+    int used = 0;
+    for (int i = 0; i < n; ++i) {
+        const GroundQuad& g = q[i];
+        const shz_sincos_t r = shz_sincosf(g.rot);
+        const float ax = g.half * r.cos, az = g.half * r.sin;      // rotated half-axes
+        PolyVert pv[4] = {
+            { v3(g.c.x - ax - az, g.c.y, g.c.z - az + ax), g.u0, g.v1, g.argb },
+            { v3(g.c.x + ax - az, g.c.y, g.c.z + az + ax), g.u1, g.v1, g.argb },
+            { v3(g.c.x + ax + az, g.c.y, g.c.z + az - ax), g.u1, g.v0, g.argb },
+            { v3(g.c.x - ax + az, g.c.y, g.c.z - az - ax), g.u0, g.v0, g.argb },
+        };
+        used += emit_poly(cam, pv, 4, out + used);
+    }
+    eng::vtx_end(mat, used);
+    return used;
 }
 
 } // namespace r3d

@@ -18,4 +18,12 @@ void icon_draw(Icon icon, real cx, real cy, real size) {
                         u0, v0, u0 + CELL_UV, v0 + CELL_UV, 0);
 }
 
+void icon_draw_tint(Icon icon, real cx, real cy, real size, uint32_t argb, float z) {
+    if (icon < 0 || icon >= ICON_COUNT) return;
+    float u0 = (float)(icon % ATLAS_COLS) * CELL_UV;
+    float v0 = (float)(icon / ATLAS_COLS) * CELL_UV;
+    eng::sprite_draw_uv(g_atlas, (float)cx, (float)cy, (float)size, (float)size, 0.0f,
+                        u0, v0, u0 + CELL_UV, v0 + CELL_UV, 0, argb, z);
+}
+
 } // namespace bt

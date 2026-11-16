@@ -1,0 +1,806 @@
+{
+ "event_rules": "events[0] = impact (weapon tip: the first frame after the tip's speed peak where it has\nslowed to 35 % of that peak - the blade meets its target and stops), events[1] = release (throw:\nthe right hand's speed peak), events[2] = collapse (death clips: the head comes within 5 cm of its\nlowest point).\nValues are 60 Hz ticks from the clip start.",
+ "clips": [
+  {
+   "name": "idle_a",
+   "source": "Idle_A",
+   "pack": "General",
+   "frames": 32,
+   "seconds": 1.067,
+   "loop": true,
+   "translated": [
+    "hips"
+   ],
+   "events": [
+    65535,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {},
+   "bound": [
+    0.002,
+    0.621,
+    0.01,
+    0.631
+   ]
+  },
+  {
+   "name": "hit_a",
+   "source": "Hit_A",
+   "pack": "General",
+   "frames": 21,
+   "seconds": 0.7,
+   "loop": false,
+   "translated": [
+    "hips"
+   ],
+   "events": [
+    65535,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {},
+   "bound": [
+    -0.006,
+    0.621,
+    0.019,
+    0.653
+   ]
+  },
+  {
+   "name": "hit_b",
+   "source": "Hit_B",
+   "pack": "General",
+   "frames": 27,
+   "seconds": 0.9,
+   "loop": false,
+   "translated": [
+    "hips"
+   ],
+   "events": [
+    65535,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {},
+   "bound": [
+    0.003,
+    0.621,
+    0.084,
+    0.688
+   ]
+  },
+  {
+   "name": "death_a",
+   "source": "Death_A",
+   "pack": "General",
+   "frames": 25,
+   "seconds": 0.833,
+   "loop": false,
+   "translated": [
+    "hips",
+    "handslot.l",
+    "handslot.r",
+    "upperleg.r"
+   ],
+   "events": [
+    65535,
+    65535,
+    28,
+    65535
+   ],
+   "detect": {
+    "collapse_frame": 14,
+    "head_low": 0.6356446146965026,
+    "head_start": 1.2414253950119023
+   },
+   "bound": [
+    -0.14,
+    0.621,
+    -0.22,
+    1.259
+   ]
+  },
+  {
+   "name": "death_b",
+   "source": "Death_B",
+   "pack": "General",
+   "frames": 80,
+   "seconds": 2.667,
+   "loop": false,
+   "translated": [
+    "hips",
+    "handslot.l",
+    "handslot.r",
+    "upperleg.l",
+    "upperleg.r"
+   ],
+   "events": [
+    65535,
+    65535,
+    102,
+    65535
+   ],
+   "detect": {
+    "collapse_frame": 51,
+    "head_low": 0.6403452157974243,
+    "head_start": 1.2414253950119023
+   },
+   "bound": [
+    0.136,
+    0.621,
+    0.184,
+    1.269
+   ]
+  },
+  {
+   "name": "throw",
+   "source": "Throw",
+   "pack": "General",
+   "frames": 42,
+   "seconds": 1.4,
+   "loop": false,
+   "translated": [
+    "hips",
+    "upperarm.l",
+    "upperarm.r",
+    "upperleg.l",
+    "upperleg.r"
+   ],
+   "events": [
+    65535,
+    46,
+    65535,
+    65535
+   ],
+   "detect": {
+    "bone": "hand.r",
+    "peak_frame": 19,
+    "peak_speed": 11.813890579169204
+   },
+   "bound": [
+    0.027,
+    0.72,
+    0.079,
+    1.029
+   ]
+  },
+  {
+   "name": "use_item",
+   "source": "Use_Item",
+   "pack": "General",
+   "frames": 49,
+   "seconds": 1.633,
+   "loop": false,
+   "translated": [
+    "hips"
+   ],
+   "events": [
+    65535,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {},
+   "bound": [
+    0.008,
+    0.621,
+    0.032,
+    0.726
+   ]
+  },
+  {
+   "name": "interact",
+   "source": "Interact",
+   "pack": "General",
+   "frames": 40,
+   "seconds": 1.333,
+   "loop": false,
+   "translated": [
+    "hips",
+    "upperarm.r"
+   ],
+   "events": [
+    65535,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {},
+   "bound": [
+    0.008,
+    0.621,
+    0.269,
+    0.709
+   ]
+  },
+  {
+   "name": "chop",
+   "source": "Melee_1H_Attack_Chop",
+   "pack": "CombatMelee",
+   "frames": 33,
+   "seconds": 1.1,
+   "loop": false,
+   "translated": [
+    "hips"
+   ],
+   "events": [
+    38,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {
+    "bone": "handslot.r",
+    "peak_frame": 17,
+    "peak_speed": 26.05832253898783,
+    "impact_frame": 19
+   },
+   "bound": [
+    0.013,
+    0.618,
+    0.021,
+    0.762
+   ]
+  },
+  {
+   "name": "slice_d",
+   "source": "Melee_1H_Attack_Slice_Diagonal",
+   "pack": "CombatMelee",
+   "frames": 31,
+   "seconds": 1.033,
+   "loop": false,
+   "translated": [
+    "hips",
+    "upperleg.l"
+   ],
+   "events": [
+    30,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {
+    "bone": "handslot.r",
+    "peak_frame": 12,
+    "peak_speed": 29.73672279515287,
+    "impact_frame": 15
+   },
+   "bound": [
+    -0.068,
+    0.621,
+    0.171,
+    0.884
+   ]
+  },
+  {
+   "name": "slice_h",
+   "source": "Melee_1H_Attack_Slice_Horizontal",
+   "pack": "CombatMelee",
+   "frames": 42,
+   "seconds": 1.4,
+   "loop": false,
+   "translated": [
+    "hips"
+   ],
+   "events": [
+    22,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {
+    "bone": "handslot.r",
+    "peak_frame": 8,
+    "peak_speed": 30.154422311892347,
+    "impact_frame": 11
+   },
+   "bound": [
+    -0.097,
+    0.621,
+    0.101,
+    0.888
+   ]
+  },
+  {
+   "name": "jump_chop",
+   "source": "Melee_1H_Attack_Jump_Chop",
+   "pack": "CombatMelee",
+   "frames": 41,
+   "seconds": 1.367,
+   "loop": false,
+   "translated": [
+    "hips",
+    "upperleg.l",
+    "upperleg.r"
+   ],
+   "events": [
+    48,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {
+    "bone": "handslot.r",
+    "peak_frame": 22,
+    "peak_speed": 21.44480005411874,
+    "impact_frame": 24
+   },
+   "bound": [
+    -0.028,
+    0.659,
+    0.178,
+    0.897
+   ]
+  },
+  {
+   "name": "stab",
+   "source": "Melee_1H_Attack_Stab",
+   "pack": "CombatMelee",
+   "frames": 49,
+   "seconds": 1.633,
+   "loop": false,
+   "translated": [
+    "hips",
+    "upperarm.r",
+    "upperleg.l"
+   ],
+   "events": [
+    26,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {
+    "bone": "handslot.r",
+    "peak_frame": 11,
+    "peak_speed": 11.80328258097919,
+    "impact_frame": 13
+   },
+   "bound": [
+    0.026,
+    0.621,
+    0.249,
+    0.866
+   ]
+  },
+  {
+   "name": "chop_2h",
+   "source": "Melee_2H_Attack_Chop",
+   "pack": "CombatMelee",
+   "frames": 50,
+   "seconds": 1.667,
+   "loop": false,
+   "translated": [
+    "hips",
+    "upperarm.l",
+    "upperarm.r",
+    "handslot.r"
+   ],
+   "events": [
+    54,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {
+    "bone": "handslot.r",
+    "peak_frame": 25,
+    "peak_speed": 18.414772854577922,
+    "impact_frame": 27
+   },
+   "bound": [
+    0.068,
+    0.62,
+    0.227,
+    0.735
+   ]
+  },
+  {
+   "name": "idle_2h",
+   "source": "Melee_2H_Idle",
+   "pack": "CombatMelee",
+   "frames": 32,
+   "seconds": 1.067,
+   "loop": true,
+   "translated": [
+    "hips",
+    "upperarm.l",
+    "upperarm.r"
+   ],
+   "events": [
+    65535,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {},
+   "bound": [
+    0.006,
+    0.619,
+    0.237,
+    0.692
+   ]
+  },
+  {
+   "name": "idle_melee",
+   "source": "Melee_Unarmed_Idle",
+   "pack": "CombatMelee",
+   "frames": 32,
+   "seconds": 1.067,
+   "loop": true,
+   "translated": [
+    "hips",
+    "upperarm.l",
+    "upperarm.r"
+   ],
+   "events": [
+    65535,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {},
+   "bound": [
+    -0.039,
+    0.617,
+    0.223,
+    0.707
+   ]
+  },
+  {
+   "name": "block",
+   "source": "Melee_Block",
+   "pack": "CombatMelee",
+   "frames": 33,
+   "seconds": 1.1,
+   "loop": false,
+   "translated": [
+    "hips",
+    "upperarm.l",
+    "upperleg.l",
+    "upperleg.r"
+   ],
+   "events": [
+    65535,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {},
+   "bound": [
+    -0.013,
+    0.621,
+    0.231,
+    0.719
+   ]
+  },
+  {
+   "name": "blocking",
+   "source": "Melee_Blocking",
+   "pack": "CombatMelee",
+   "frames": 32,
+   "seconds": 1.067,
+   "loop": true,
+   "translated": [
+    "hips",
+    "upperarm.l",
+    "upperleg.l",
+    "upperleg.r"
+   ],
+   "events": [
+    65535,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {},
+   "bound": [
+    -0.09,
+    0.609,
+    0.231,
+    0.699
+   ]
+  },
+  {
+   "name": "block_hit",
+   "source": "Melee_Block_Hit",
+   "pack": "CombatMelee",
+   "frames": 33,
+   "seconds": 1.1,
+   "loop": false,
+   "translated": [
+    "hips",
+    "upperarm.l",
+    "upperleg.l",
+    "upperleg.r"
+   ],
+   "events": [
+    65535,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {},
+   "bound": [
+    -0.09,
+    0.619,
+    0.224,
+    0.697
+   ]
+  },
+  {
+   "name": "run",
+   "source": "Running_A",
+   "pack": "MovementBasic",
+   "frames": 24,
+   "seconds": 0.8,
+   "loop": true,
+   "translated": [
+    "hips",
+    "upperarm.l",
+    "upperarm.r",
+    "upperleg.l",
+    "upperleg.r"
+   ],
+   "events": [
+    65535,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {},
+   "bound": [
+    -0.0,
+    0.614,
+    0.004,
+    0.668
+   ]
+  },
+  {
+   "name": "jump_short",
+   "source": "Jump_Full_Short",
+   "pack": "MovementBasic",
+   "frames": 36,
+   "seconds": 1.2,
+   "loop": false,
+   "translated": [
+    "hips"
+   ],
+   "events": [
+    65535,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {},
+   "bound": [
+    -0.016,
+    0.621,
+    0.007,
+    0.853
+   ]
+  },
+  {
+   "name": "dodge_back",
+   "source": "Dodge_Backward",
+   "pack": "MovementAdvanced",
+   "frames": 13,
+   "seconds": 0.433,
+   "loop": false,
+   "translated": [
+    "hips",
+    "upperleg.l",
+    "upperleg.r"
+   ],
+   "events": [
+    65535,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {},
+   "bound": [
+    0.008,
+    0.621,
+    -0.214,
+    0.741
+   ]
+  },
+  {
+   "name": "walk_back",
+   "source": "Walking_Backwards",
+   "pack": "MovementAdvanced",
+   "frames": 32,
+   "seconds": 1.067,
+   "loop": true,
+   "translated": [
+    "hips",
+    "upperarm.r",
+    "upperleg.l",
+    "upperleg.r"
+   ],
+   "events": [
+    65535,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {},
+   "bound": [
+    0.008,
+    0.62,
+    0.093,
+    0.697
+   ]
+  },
+  {
+   "name": "skel_idle",
+   "source": "Skeletons_Idle",
+   "pack": "Special",
+   "frames": 128,
+   "seconds": 4.267,
+   "loop": true,
+   "translated": [
+    "hips",
+    "upperleg.r"
+   ],
+   "events": [
+    65535,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {},
+   "bound": [
+    -0.013,
+    0.572,
+    0.103,
+    0.683
+   ]
+  },
+  {
+   "name": "skel_awaken",
+   "source": "Skeletons_Awaken_Standing",
+   "pack": "Special",
+   "frames": 31,
+   "seconds": 1.033,
+   "loop": false,
+   "translated": [
+    "hips",
+    "upperarm.l",
+    "upperarm.r",
+    "upperleg.r"
+   ],
+   "events": [
+    65535,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {},
+   "bound": [
+    -0.025,
+    0.602,
+    -0.33,
+    0.818
+   ]
+  },
+  {
+   "name": "skel_rise",
+   "source": "Skeletons_Awaken_Floor",
+   "pack": "Special",
+   "frames": 70,
+   "seconds": 2.333,
+   "loop": false,
+   "translated": [
+    "hips",
+    "upperarm.l",
+    "handslot.l",
+    "upperarm.r",
+    "handslot.r",
+    "upperleg.l",
+    "upperleg.r"
+   ],
+   "events": [
+    65535,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {},
+   "bound": [
+    -0.3,
+    0.583,
+    -0.166,
+    2.056
+   ]
+  },
+  {
+   "name": "skel_death",
+   "source": "Skeletons_Death",
+   "pack": "Special",
+   "frames": 61,
+   "seconds": 2.033,
+   "loop": false,
+   "translated": [
+    "hips",
+    "upperarm.l",
+    "handslot.l",
+    "handslot.r",
+    "upperleg.r"
+   ],
+   "events": [
+    65535,
+    65535,
+    26,
+    65535
+   ],
+   "detect": {
+    "collapse_frame": 13,
+    "head_low": 0.73490971326828,
+    "head_start": 1.1440356969833378
+   },
+   "bound": [
+    0.502,
+    0.614,
+    -0.392,
+    1.884
+   ]
+  },
+  {
+   "name": "skel_taunt",
+   "source": "Skeletons_Taunt",
+   "pack": "Special",
+   "frames": 32,
+   "seconds": 1.067,
+   "loop": false,
+   "translated": [
+    "hips",
+    "upperleg.r"
+   ],
+   "events": [
+    65535,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {},
+   "bound": [
+    -0.026,
+    0.613,
+    0.191,
+    0.812
+   ]
+  }
+ ],
+ "bytes": 258112,
+ "bones": [
+  "root",
+  "hips",
+  "spine",
+  "chest",
+  "upperarm.l",
+  "lowerarm.l",
+  "wrist.l",
+  "hand.l",
+  "handslot.l",
+  "upperarm.r",
+  "lowerarm.r",
+  "wrist.r",
+  "hand.r",
+  "handslot.r",
+  "head",
+  "upperleg.l",
+  "lowerleg.l",
+  "foot.l",
+  "toes.l",
+  "upperleg.r",
+  "lowerleg.r",
+  "foot.r",
+  "toes.r"
+ ]
+}

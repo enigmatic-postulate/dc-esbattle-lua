@@ -1,0 +1,22 @@
+# Bot policies for the turn-level rules equivalence test (tests/battle3d/run.sh).
+# One policy per line; every policy runs against every legacy encounter.
+attack:0
+attack:1
+attack:2
+fire
+guard
+cycle:AFG
+cycle:FFA
+cycle:GA
+cycle:FGGA
+cycle:bc
+cycle:YF
+cycle:21F
+cycle:cbA
+random:1
+random:2
+random:3
+random:4
+random:5
+random:6
+random:7

@@ -1,0 +1,23 @@
+ST active=hero turn_i=0 | hero:20/20 slime_a:12/12 slime_b:12/12
+ACT 1 hero attack -> slime_b
+ST active=hero turn_i=0 | hero:20/20 slime_a:12/12 slime_b:7/12
+ST active=slime_a turn_i=1 | hero:20/20 slime_a:12/12 slime_b:7/12
+ACT 2 slime_a attack -> hero
+ST active=slime_a turn_i=1 | hero:18/20 slime_a:12/12 slime_b:7/12
+ST active=slime_b turn_i=2 | hero:18/20 slime_a:12/12 slime_b:7/12
+ACT 3 slime_b attack -> hero
+ST active=slime_b turn_i=2 | hero:16/20 slime_a:12/12 slime_b:7/12
+ST active=hero turn_i=0 | hero:16/20 slime_a:12/12 slime_b:7/12
+ACT 4 hero fireball -> slime_a slime_b
+ST active=hero turn_i=0 | hero:16/20 slime_a:9/12+burn2.2 slime_b:4/12+burn2.2
+ST active=slime_a turn_i=1 | hero:16/20 slime_a:7/12+burn2.2 slime_b:4/12+burn2.2
+ACT 5 slime_a attack -> hero
+ST active=slime_a turn_i=1 | hero:14/20 slime_a:7/12+burn2.2 slime_b:4/12+burn2.2
+ST active=slime_b turn_i=2 | hero:14/20 slime_a:7/12+burn1.2 slime_b:2/12+burn2.2
+ACT 6 slime_b attack -> hero
+ST active=slime_b turn_i=2 | hero:12/20 slime_a:7/12+burn1.2 slime_b:2/12+burn2.2
+ST active=hero turn_i=0 | hero:12/20 slime_a:7/12+burn1.2 slime_b:2/12+burn1.2
+ACT 7 hero attack -> slime_a
+ST active=hero turn_i=0 | hero:12/20 slime_a:2/12+burn1.2 slime_b:2/12+burn1.2
+ST active=hero turn_i=0 | hero:12/20 slime_a:0/12 slime_b:0/12
+END outcome=won state=win

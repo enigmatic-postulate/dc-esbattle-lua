@@ -1,0 +1,43 @@
+ST active=hero turn_i=0 | hero:20/20 slime_a:12/12 slime_b:12/12 slime_c:12/12
+ACT 1 hero attack -> slime_a
+ST active=hero turn_i=0 | hero:20/20 slime_a:7/12 slime_b:12/12 slime_c:12/12
+ST active=slime_a turn_i=1 | hero:20/20 slime_a:7/12 slime_b:12/12 slime_c:12/12
+ACT 2 slime_a attack -> hero
+ST active=slime_a turn_i=1 | hero:18/20 slime_a:7/12 slime_b:12/12 slime_c:12/12
+ST active=slime_b turn_i=2 | hero:18/20 slime_a:7/12 slime_b:12/12 slime_c:12/12
+ACT 3 slime_b attack -> hero
+ST active=slime_b turn_i=2 | hero:16/20 slime_a:7/12 slime_b:12/12 slime_c:12/12
+ST active=slime_c turn_i=3 | hero:16/20 slime_a:7/12 slime_b:12/12 slime_c:12/12
+ACT 4 slime_c attack -> hero
+ST active=slime_c turn_i=3 | hero:14/20 slime_a:7/12 slime_b:12/12 slime_c:12/12
+ST active=hero turn_i=0 | hero:14/20 slime_a:7/12 slime_b:12/12 slime_c:12/12
+ACT 5 hero attack -> slime_a
+ST active=hero turn_i=0 | hero:14/20 slime_a:2/12 slime_b:12/12 slime_c:12/12
+ST active=slime_a turn_i=1 | hero:14/20 slime_a:2/12 slime_b:12/12 slime_c:12/12
+ACT 6 slime_a attack -> hero
+ST active=slime_a turn_i=1 | hero:12/20 slime_a:2/12 slime_b:12/12 slime_c:12/12
+ST active=slime_b turn_i=2 | hero:12/20 slime_a:2/12 slime_b:12/12 slime_c:12/12
+ACT 7 slime_b attack -> hero
+ST active=slime_b turn_i=2 | hero:10/20 slime_a:2/12 slime_b:12/12 slime_c:12/12
+ST active=slime_c turn_i=3 | hero:10/20 slime_a:2/12 slime_b:12/12 slime_c:12/12
+ACT 8 slime_c attack -> hero
+ST active=slime_c turn_i=3 | hero:8/20 slime_a:2/12 slime_b:12/12 slime_c:12/12
+ST active=hero turn_i=0 | hero:8/20 slime_a:2/12 slime_b:12/12 slime_c:12/12
+ACT 9 hero attack -> slime_a
+ST active=hero turn_i=0 | hero:8/20 slime_a:0/12 slime_b:12/12 slime_c:12/12
+ST active=slime_b turn_i=2 | hero:8/20 slime_a:0/12 slime_b:12/12 slime_c:12/12
+ACT 10 slime_b attack -> hero
+ST active=slime_b turn_i=2 | hero:6/20 slime_a:0/12 slime_b:12/12 slime_c:12/12
+ST active=slime_c turn_i=3 | hero:6/20 slime_a:0/12 slime_b:12/12 slime_c:12/12
+ACT 11 slime_c attack -> hero
+ST active=slime_c turn_i=3 | hero:4/20 slime_a:0/12 slime_b:12/12 slime_c:12/12
+ST active=hero turn_i=0 | hero:4/20 slime_a:0/12 slime_b:12/12 slime_c:12/12
+ACT 12 hero attack -> slime_b
+ST active=hero turn_i=0 | hero:4/20 slime_a:0/12 slime_b:7/12 slime_c:12/12
+ST active=slime_b turn_i=2 | hero:4/20 slime_a:0/12 slime_b:7/12 slime_c:12/12
+ACT 13 slime_b attack -> hero
+ST active=slime_b turn_i=2 | hero:2/20 slime_a:0/12 slime_b:7/12 slime_c:12/12
+ST active=slime_c turn_i=3 | hero:2/20 slime_a:0/12 slime_b:7/12 slime_c:12/12
+ACT 14 slime_c attack -> hero
+ST active=slime_c turn_i=3 | hero:0/20 slime_a:0/12 slime_b:7/12 slime_c:12/12
+END outcome=lost state=lose

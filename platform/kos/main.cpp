@@ -79,13 +79,13 @@ static_assert(offsetof(eng::Vert3, oargb) == offsetof(pvr_vertex_t, oargb), "Ver
 static_assert(eng::VERT == PVR_CMD_VERTEX && eng::VERT_EOL == PVR_CMD_VERTEX_EOL, "Vert3 commands");
 
 struct Material3 { pvr_poly_hdr_t hdr; pvr_list_t list; };
-static Material3 g_mats[128];       // village: ~90 (house variants per yaw x opaque/faded copies)
+static Material3 g_mats[256];       // village ~90 (house variants per yaw x opaque/faded copies) + battle ~30
 static int g_nmats = 0;
 
 const int ARENA_VERTS = 16384;                      // 512 KiB; the village uses ~5-9k per frame
 static pvr_vertex_t g_arena[ARENA_VERTS] __attribute__((aligned(32)));
 struct Batch3 { int mat, first, count; };
-static Batch3 g_batches3[256];
+static Batch3 g_batches3[512];      // battle: props + characters + weapons + FX batches
 static int g_nbatches3 = 0, g_arena_used = 0, g_arena_open = -1;
 static int g_arena_peak = 0, g_arena_drops = 0;     // DIAG report
 
@@ -304,7 +304,7 @@ Material material_create(Sprite tex, int flags) {
     if (g_nmats >= (int)(sizeof(g_mats) / sizeof(g_mats[0]))) { BOOT("material limit reached\n"); return 0; }
     if (tex < 0 || tex > g_sprite_count) return 0;
     Material3& m = g_mats[g_nmats];
-    m.list = (flags & MAT_TRANSLUCENT) ? PVR_LIST_TR_POLY : PVR_LIST_OP_POLY;
+    m.list = (flags & (MAT_TRANSLUCENT | MAT_ADDITIVE)) ? PVR_LIST_TR_POLY : PVR_LIST_OP_POLY;
     pvr_poly_cxt_t cxt;
     if (tex) {
         const ::Sprite& s = g_sprites[tex - 1];
@@ -315,6 +315,10 @@ Material material_create(Sprite tex, int flags) {
     }
     // Front faces are counter-clockwise on screen (render3d.h): cull the clockwise ones.
     cxt.gen.culling = (flags & MAT_CULL) ? PVR_CULLING_CW : PVR_CULLING_NONE;
+    if (flags & MAT_ADDITIVE) {                   // glows/sparks/fire: dst + src * src_alpha
+        cxt.blend.src = PVR_BLEND_SRCALPHA;
+        cxt.blend.dst = PVR_BLEND_ONE;
+    }
     pvr_poly_compile(&m.hdr, &cxt);
     DIAG("material %d: tex %d flags %d list %d\n", g_nmats + 1, tex, flags, (int)m.list);
     return ++g_nmats;
@@ -444,6 +448,13 @@ int main(int, char**) {
     check_file("/rd/models/house_stone.dmf");
     check_file("/rd/tex/ground.png");
     check_file("/rd/models/skel_mage.dmf");
+    check_file("/rd/anims/rig_medium.dma");       // slice 3D-4: the 3D battle
+    check_file("/rd/arenas/village.txt");
+    check_file("/rd/arenas/barrow.txt");
+    check_file("/rd/models/skel_rogue.dmf");
+    check_file("/rd/models/house_stone_b.dmf");
+    check_file("/rd/tex/fx.tex");
+    check_file("/rd/tex/dirt.png");
 
     eng::seed_random((uint32_t)timer_ms_gettime64());
 #if !defined(DIAG_SKIP_GAME)

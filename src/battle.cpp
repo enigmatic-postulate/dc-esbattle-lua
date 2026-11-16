@@ -2,6 +2,8 @@
 // Each update() advances at most one state per tick, exactly like the Lua if/elseif chain;
 // the tick-by-tick cadence is observable and preserved (verified by the harness).
 #include "battle.h"
+#include "ai.h"
+#include "battle3d.h"
 #include "fastmath.h"
 #include "assets.h"
 #include "chars.h"
@@ -20,6 +22,12 @@
 namespace bt {
 
 static BattleCtx g_ctx;
+static Rules g_rules;
+static BattleView g_view = BattleView::Models3D;
+
+Rules& rules() { return g_rules; }
+void battle_set_view(BattleView v) { g_view = v; }
+BattleView battle_view() { return g_view; }
 static const int T_ANIMATE_MIN = 12;   // 0.20 s
 static const int T_RESULT_HOLD = 30;   // banner shown this long before A is accepted
 
@@ -47,6 +55,7 @@ static void rebuild_order(BattleCtx& ctx) {
 void battle_init() {
     pres_init(g_ctx);
     ui_init(g_ctx);
+    if (g_view == BattleView::Models3D) battle3d_init();
 }
 
 void battle_begin(const EncounterDef& enc, const PartyState& party) {
@@ -55,6 +64,8 @@ void battle_begin(const EncounterDef& enc, const PartyState& party) {
     ctx.pres.flashes.clear();
     ctx.fx.floats.clear();
     spawn_encounter(ctx, enc, party);
+    ctx.potions = party.potions;
+    boss_begin(ctx);
     rebuild_order(ctx);
     ui_reset(ctx);
     ctx.pending = PendingAction();
@@ -62,9 +73,13 @@ void battle_begin(const EncounterDef& enc, const PartyState& party) {
     ctx.anim_ticks = 0;
     ctx.result_ticks = 0;
     ctx.outcome = BattleOutcome::None;
+    ctx.events.clear();
+    if (g_view == BattleView::Models3D) battle3d_begin(ctx, enc);
 }
 
 BattleOutcome battle_outcome() { return g_ctx.outcome; }
+
+int battle_potions() { return g_ctx.potions; }
 
 int battle_hero_hp() {
     for (const Actor& a : g_ctx.actors) if (a.team == Team::Player) return a.hp;
@@ -80,11 +95,19 @@ void battle_update() {
     for (Actor& a : ctx.actors)
         if (a.hurt_ticks > 0) a.hurt_ticks = a.hurt_ticks - 1;
 
+    // Slice 3D-4: the 3D presentation turns this tick's events into sequences. While one plays the
+    // state machine waits (the gates below) - they only change WHEN the next state comes, never
+    // WHAT happens (tests/battle3d: turn-level equivalence with the sprite battle).
+    bool busy = false;
+    if (g_view == BattleView::Models3D) { battle3d_tick(ctx); busy = battle3d_busy(); }
+    else ctx.events.clear();
+
     if (count_alive_team(ctx, Team::Enemy) == 0)       ctx.state = BattleState::Win;
     else if (count_alive_team(ctx, Team::Player) == 0) ctx.state = BattleState::Lose;
 
     switch (ctx.state) {
     case BattleState::Command: {
+        if (busy) break;                                    // gate: burn ticks, deaths, the intro
         if (!alive(ctx.active)) { ctx.state = BattleState::TurnAdvance; return; }
 
         if (ctx.active->team == Team::Player) {
@@ -96,14 +119,14 @@ void battle_update() {
                                 ? BattleState::TurnAdvance : BattleState::Resolve;
             }
         } else {
-            // Enemy AI: basic attack on the first alive opponent.
-            const SkillDef& sk = skill(SK_ATTACK);
-            ActorList targets = select_targets(ctx, *ctx.active, sk.target_mode, 0);
+            // Enemy AI (ai.cpp): basic attack on the first alive opponent; the Bone Warden's rotation.
+            const EnemyChoice ch = enemy_choose(ctx, *ctx.active);
+            const SkillDef& sk = skill((SkillIndex)ch.skill);
             ctx.pending = PendingAction();
             ctx.pending.skill = &sk;
-            ctx.pending.targets = targets;
+            ctx.pending.targets = ch.targets;
             ctx.pending.cursor_index = 0;
-            ctx.state = (sk.target_mode != TargetMode::Self && targets.empty())
+            ctx.state = (sk.target_mode != TargetMode::Self && ch.targets.empty())
                             ? BattleState::TurnAdvance : BattleState::Resolve;
         }
         break;
@@ -127,6 +150,15 @@ void battle_update() {
         SkillResult result;
         if (sk.resolve) result = sk.resolve(ctx, *ctx.active, ctx.pending.targets);
         if (sk.present) sk.present(ctx, *ctx.active, result, ctx.pending.targets);
+        {   // presentation event (read by the 3D view only)
+            BattleEvent ev;
+            ev.kind = EvKind::Action; ev.user = ctx.active; ev.skill = skill_index(&sk); ev.result = result.kind; ev.dmg = 0;
+            if (result.ok && result.kind == ResultKind::Single && result.target) ev.hits.push(Hit{ result.target, result.dmg });
+            else if (result.ok && (result.kind == ResultKind::Aoe || result.kind == ResultKind::Summon)) ev.hits = result.hits;
+            else if (result.ok && result.kind == ResultKind::Self && result.target) ev.hits.push(Hit{ result.target, result.dmg });   // potion: -healed
+            ctx.events.push(ev);
+        }
+        boss_after(ctx);                                    // a fallen boss takes his minions
 
         ctx.anim_ticks = 0;
         ctx.state = BattleState::Animate;
@@ -135,7 +167,7 @@ void battle_update() {
 
     case BattleState::Animate:
         ctx.anim_ticks = ctx.anim_ticks + 1;
-        if (ctx.anim_ticks >= T_ANIMATE_MIN && pres_done(ctx)) ctx.state = BattleState::TurnAdvance;
+        if (ctx.anim_ticks >= T_ANIMATE_MIN && pres_done(ctx) && !busy) ctx.state = BattleState::TurnAdvance;
         break;
 
     case BattleState::TurnAdvance:
@@ -144,6 +176,7 @@ void battle_update() {
             status_tick_turns(ctx, *ctx.active);
         }
         ctx.active = advance_turn(ctx);
+        boss_after(ctx);                                    // burn may have felled the boss
         ui_reset(ctx);
         ctx.pending = PendingAction();
         ctx.state = BattleState::Command;
@@ -152,6 +185,7 @@ void battle_update() {
     case BattleState::Win:
     case BattleState::Lose:
         // Result banner; A (after a short hold) confirms and hands control back to the game.
+        if (busy) break;                                    // gate: the killing blow's sequence
         ctx.result_ticks = ctx.result_ticks + 1;
         if (ctx.outcome == BattleOutcome::None && ctx.result_ticks >= T_RESULT_HOLD && input_pressed(eng::KEY_FIRE))
             ctx.outcome = (ctx.state == BattleState::Win) ? BattleOutcome::Won : BattleOutcome::Lost;
@@ -175,6 +209,7 @@ static void draw_result_banner(const BattleCtx& ctx) {
 
 void battle_draw() {
     BattleCtx& ctx = g_ctx;
+    if (g_view == BattleView::Models3D) { battle3d_draw(ctx); return; }
     draw_backdrop();
     for (Actor& a : ctx.actors) {
         if (a.hp > 0) {

@@ -17,7 +17,8 @@ and a plain `make` in DreamSDK still produces `battle.elf`.
 | Game logic unchanged | **Verified:** 44/44 host logic traces byte-identical to the pre-SH4ZAM build, and 22/22 traces of the SH4 build under qemu (§5) |
 | Scene and content unchanged | **Verified:** `romdisk/` untouched. Rendered 3D output of the SH4 build within 0.113 px of the original on screen, same UVs, colours within 1/255; every strip culled differently draws no pixel (§5.3) |
 | Builds with DreamSDK's `make` | **Checked as far as possible without DreamSDK:** the unmodified makefile, run in a KOS-shaped environment with the same GCC 13 and the exact flags of the user's last build, compiles everything, links `-lsh4zam` from `$KOS_PORTS/lib` and produces `battle.elf`; the `SH4ZAM_DIR` route too (§5.5) |
-| Faster | **Measured on the SH4 code (qemu):** median field frame **1.44× fewer instructions** (1,120k → 777k), worst frame 1.68M → 1.17M; **FDIV/FSQRT per frame 8,912 → 23**; pipeline-model cycles 1.49× fewer. On top of that, cache-line allocation and prefetching that only the hardware can show (§4) |
+| Faster | **Measured on the SH4 code (qemu):** median field frame **1.44× fewer instructions** (1,120k → 777k), worst frame 1.68M → 1.17M; **FDIV/FSQRT per frame 8,912 → 23**; pipeline-model cycles 1.49× fewer (§4) |
+| Memory side of the hot paths (second pass) | **Done and measured with an operand-cache model:** SH4ZAM's PREF (`SHZ_PREFETCH`) and MOVCA.L (`shz_dcache_alloc_line`) extended to the loops that index memory (strip copy, prop emission, two-bone skinning, poses, per-instance loops): demand cache misses per field frame **12,427 → 2,780 loads (4.5× fewer), 1,227 → 503 stores (2.4× fewer)**, for 15% more instructions; modelled CPU frame **1.10× (20-cycle miss) to 1.29× (40-cycle miss)** faster. Output bit-identical (§8) |
 
 Not done here: a run on a Dreamcast. The frame-time probe for that is already in the build:
 `make DIAG=1` prints the worst CPU frame and the number of frames over 16.7 ms every 300 frames.
@@ -227,7 +228,7 @@ one build only lie wholly off screen, or at most 0.1 px inside an edge: rounding
 ### 5.5 Build
 
 * KOS-shaped environment (stub KOS headers and libraries, stub `kos-c++`/`kos-cmake` around GCC
-  13.3 `sh-elf`, `KOS_CFLAGS` = the user's flags): the unmodified makefile builds all objects,
+  13.3 `sh-elf`, `KOS_CFLAGS` = the user's flags): the makefile builds all objects,
   links `battle.elf` with `-lsh4zam` from `$KOS_PORTS/lib` (a port-style install of the supplied
   SH4ZAM), and applies `-O3` to the three hot units only. `make SH4ZAM_DIR=<checkout>` builds
   `build/sh4zam-kos/libsh4zam.a` with SH4ZAM's CMake project and links it. Without the port, `make`
@@ -265,8 +266,9 @@ logic (§5.2).
 
 Per AGENTS.md, these go upstream rather than into a fork. They are written up in
 `tests/sh4zam/README.md`: `shz_memcpy32_1()`'s `"+m"` pointer constraint costs about 6
-instructions per call in a loop; the C++ interop guide's `reinterpret_cast` helpers are exposed to
-strict aliasing.
+instructions per call in a loop (re-checked in the second pass: the strip copy through it is 32
+instructions per vertex against 28 with word moves); the C++ interop guide's `reinterpret_cast`
+helpers are exposed to strict aliasing.
 
 ### 6.4 Not covered
 
@@ -282,18 +284,146 @@ strict aliasing.
 |---|---|
 | `src/hwmath.h` | **new**: the one include point for SH4ZAM, with the version and availability checks |
 | `src/math3d.h` | math layer rewritten over SH4ZAM (interop types, XMTRX helpers) |
-| `src/render3d.h/.cpp` | XMTRX/FTRV/FSRRA vertex pipeline, FTRV strip culling, MOVCA.L vertex writes, prefetch; camera has the viewport-folded `screen` matrix and precomputed frustum terms |
-| `src/dmf.cpp` | skinning in XMTRX, `shz_quat_nlerp` sampling, `shz_fmodf` |
-| `src/field3d.cpp` | camera trig, ground rows through XMTRX, fade test through XMTRX, SH4ZAM scalars |
+| `src/render3d.h/.cpp` | XMTRX/FTRV/FSRRA vertex pipeline, FTRV strip culling, MOVCA.L vertex writes, prefetch; camera has the viewport-folded `screen` matrix and precomputed frustum terms. Second pass: PREF software pipelines in the strip loops, MOVCA.L + PREF for the two-bone scratch, PREF for baked colours, strip words and strip spheres (§8) |
+| `src/dmf.h/.cpp` | skinning in XMTRX, `shz_quat_nlerp` sampling, `shz_fmodf`. Second pass: `load()` leaves `LOOKAHEAD_PAD` zero bytes after each model; PREF in `pose_sample` / `pose_skin` (§8) |
+| `src/field3d.cpp` | camera trig, ground rows through XMTRX, fade test through XMTRX, SH4ZAM scalars. Second pass: PREF in the per-instance loops (§8) |
 | `src/fastmath.h` | **new**: `real`-typed SH4ZAM helpers for the 2D battle (libm on the double build) |
 | `src/battle.cpp`, `ui.cpp`, `presentation.cpp`, `fx.cpp` | use `fastmath.h` |
 | `platform/kos/main.cpp` | SH4ZAM version in the boot log; one FSCA per rotated sprite |
 | `platform/host/host_engine.cpp`, `platform/bench/bench_main.cpp` | 32-byte-aligned vertex arenas, like the KOS backend's |
-| `makefile` | SH4ZAM port / checkout, `sh4zam-check`, `NDEBUG`, `HOT_OPT`, host build against SH4ZAM's SW back-end |
+| `makefile` | SH4ZAM port / checkout, `sh4zam-check`, `NDEBUG`, `HOT_OPT`, host build against SH4ZAM's SW back-end. Second pass: `-std=gnu++17` for C++ (SH4ZAM's C++ headers need C++17; GCC 9/10 default to C++14) |
 | `tests/run_tests.sh` | C++17 + SH4ZAM headers for T1; P2 restores the committed assets |
 | `tools/compare_frames.py` | **new**: vertex-level comparison of two builds' frame dumps |
-| `tests/sh4zam/` | **new**: the SH4/qemu harness (§4.1, README) |
+| `tests/sh4zam/` | **new**: the SH4/qemu harness (§4.1, README). Second pass: `shcache.c` (operand-cache model), `summarize_cache.py`, `qemu-10.1.0-sh4-fpu.patch`, `sh4kit.sh cache` (§8) |
 
 The build outputs that came with the tree (`*.o`, `*.d` with `C:/DreamSDK` paths, `battle.elf`;
 git-ignored) were removed. The next `make` therefore rebuilds everything against the new headers,
 which is needed anyway.
+
+---
+
+## 8. Second pass: the memory side of the hot paths
+
+### 8.1 Why
+
+§4 counts instructions, and §4.3 lists what that leaves out. The biggest item is the operand
+cache: 16 KiB, direct mapped, 32-byte lines, copy-back with write allocation (KOS's set-up).
+Everything the 3D loops stream is several times that size: model vertices (a house is 64 KiB, the
+Knight 51 KiB), the transform scratch (`g_xv`, 128 KiB), the two-bone scratch (`g_xt`), and the
+512 KiB PVR arena. The SH4 stalls on every load that misses, and on every ordinary store that
+misses, because the line is read first. SH4ZAM covers both cases: `SHZ_PREFETCH` (PREF) starts a
+line fill early, and `shz_dcache_alloc_line` (MOVCA.L) claims a line that is about to be written in
+full, with no read. The first pass used them on the sequential streams: vertex writes and the
+character vertex stream. The loops that *index* memory had neither, and those are the strip loops,
+which read vertices in strip order.
+
+### 8.2 How it was measured
+
+`tests/sh4zam/shcache.c` is a qemu plugin that replays every load, store, MOVCA.L and PREF of the
+game's SH4 code against a model of that cache. Per tick and per draw it counts:
+
+* load misses;
+* store misses;
+* write-backs;
+* MOVCA.L allocations;
+* PREF fills.
+
+Optionally it writes a per-instruction miss profile. It has no notion of time: a PREF counts as
+arriving in time, and instruction fetches are not modelled. `summarize_cache.py` combines the
+counts with `shcount.c`'s instruction counts into modelled cycles: one per instruction (no dual
+issue), plus FDIV/FSQRT/FTRV latency, plus a fixed cost per demand miss. The Dreamcast's real miss
+cost depends on RAM timing and on how much latency a PREF hides, so results are given at 20 and 40
+cycles per miss. The runs use the same bench ELFs, input scripts and 35,067 field frames as §4,
+comparing the tree as of §4 against this pass.
+
+qemu 10.1.0, the version Ubuntu ships as source, needed the §4 FPU fixes plus one more: its
+FIPR/FTRV use the vector number as a register index. PREF also had to become visible to plugins,
+since qemu-user drops it at translation; the patch turns it into a non-faulting one-byte load
+(`tests/sh4zam/qemu-10.1.0-sh4-fpu.patch`).
+
+### 8.3 Where the misses were, and what changed
+
+Miss profile of the §4 build (`field_walk`, per field frame): **13.6k demand misses** against
+about 780k instructions. At 20 to 40 cycles each, that is 0.27 to 0.55M cycles, as much as a third
+of the frame. The sources, and the change for each:
+
+| Loop | Misses before | Change (all SH4ZAM: PREF = `SHZ_PREFETCH`, MOVCA.L = `shz_dcache_alloc_line`) |
+|---|---:|---|
+| Strip copy `g_xv` → arena (`emit_batches`) | ~4,450 | Software pipeline. Each step computes the source two strip positions ahead, PREFs it, then copies the current vertex. The lookahead runs on through the next strip's length word, so the next strip's first vertex is already requested. Strip words PREF'd 32 bytes ahead |
+| Prop strips (`draw_static`): vertex loads (~2,300, inside SH4ZAM's inlined `transform_point3`), strip spheres, strip words, colours | ~4,400 | The same pipeline over the model's vertices; strip words and spheres PREF'd ahead. A colour prefetch was measured and left out: neutral at 20 cycles per miss, with +15k instructions |
+| Character transforms (`draw_model`): two-bone scratch writes, vertex re-reads, baked colours | ~2,350 | Pass 1 claims each `g_xt` line with MOVCA.L (both 16-byte entries are written before either is read). Pass 2 PREFs the vertices and pass 1's results two lines ahead; baked colours PREF'd two lines ahead |
+| Poses (`pose_sample`, `pose_skin`) | ~800 | PREF of the next bone records and keyframe lines, and of each bone's two 48-byte results before XMTRX stores them (a store miss reads the line first) |
+| Per-instance loops (`draw_statics`, the fade test) | ~370 | PREF four instances ahead (~180 instances × 76 bytes per frame) |
+
+The strip lookahead reads up to two words past a model's last strip. `dmf::load()` therefore
+leaves `LOOKAHEAD_PAD` (64) zero bytes after every image in the model arena, so those reads stay in
+the arena and yield index 0; every other lookahead (vertices two ahead, strip words 32 bytes ahead)
+also stays within an image plus its padding. The model arena grows by 64 bytes per model (541 →
+542 KiB in the boot log). Lookaheads that could pass the end of an array are either guarded
+(`i + n < count`) or the array has room (`g_strip_sph`). PREF never faults on the Dreamcast (MMU
+off), and on the host's SW back-end `SHZ_PREFETCH` is `__builtin_prefetch`, which never faults
+either.
+
+Tried and dropped: the strip copy through `shz_memcpy32_1` (§6.3), and prefetching inside each
+strip only. Strips average about 4.5 vertices, so the per-strip prologue cost more than it saved,
+and each strip's first two vertices went unprefetched.
+
+### 8.4 Results (all 35,067 field frames; medians per frame, tick + draw)
+
+| | §4 build | This pass | |
+|---|---:|---:|---:|
+| Instructions | 776,519 | 894,353 | 0.87× |
+| Load misses | 12,427 | 2,780 | **4.47×** fewer |
+| Store misses (write allocation) | 1,227 | 503 | **2.44×** fewer |
+| Write-backs | 15,252 | 15,266 | (the arena: unchanged) |
+| PREF fills | 3,904 | 13,818 | |
+| Model cycles, 20-cycle miss | 1,095,282 | 997,171 | **1.10×** |
+| Model cycles, 40-cycle miss | 1,369,302 | 1,063,138 | **1.29×** |
+| Median CPU frame at 200 MHz | 5.48 / 6.85 ms | 4.99 / 5.32 ms | (20 / 40-cycle miss) |
+
+Per script the modelled gain is 1.06–1.10× at 20 cycles and 1.21–1.31× at 40. Per area
+(`field_walk`, per frame, instructions / misses):
+
+| Area | §4 build | This pass |
+|---|---:|---:|
+| Characters (`draw_model`, incl. strip copy) | 338k / 6,798 | 409k / 700 |
+| Props (`draw_static`) | 275k / 4,414 | 318k / 1,266 |
+| Ground + per-instance loop (`field3d_draw`) | 68k / 777 | 70k / 486 |
+| Poses (sample, skin, blend, bone `memcpy`) | 44k / 807 | 48k / 298 |
+| Per-tick view update (`field3d_tick`) | 4k / 205 | 5k / 38 |
+
+The instruction cost is mostly address arithmetic. For example, the strip copy is 28 instructions
+per vertex against 24, and the prop vertex loop 46 against 40. In the cycle model every instruction
+costs a full cycle, but these are MOV/ADD/PREF, which dual-issue with the loop's loads and stores
+on the SH4. So the modelled gains are on the conservative side of what the hardware should show.
+Of the remaining misses, about 470 per frame are props' baked colours and the rest are spread thin.
+The arena's write-backs (15k lines, ~490 KB per frame) are inherent to building the frame in RAM.
+
+### 8.5 Verification
+
+* **Output bit-identical.** SH4 build under qemu, with SH4ZAM's SH4 back-end: every vertex of every
+  40th frame of `field_walk`, `field_full`, `field_fuzz1`, `field_fuzz3` and `field_lose` is
+  identical to the §4 build's. The traces are identical too, except the boot log's model-arena
+  line (541 → 542 KiB). Host (SH4ZAM's SW back-end), float and double builds: all 22 input
+  scripts' full draw traces are identical to the §4 build's, apart from that line.
+* **Logic.** The SH4 build's `--state-only` traces equal the host's for all 22 scripts.
+* **Suite.** `tests/run_tests.sh`: the same 32 pass / 22 fail as the §4 tree, the same tests (a
+  pristine worktree of the §4 tree run side by side). The failures predate both passes (§5.1).
+* **Build.** The makefile in the KOS-shaped environment of §5.5 (GCC 13.3 `sh-elf`, the DreamSDK
+  build's flags, SH4ZAM built by its own CMake project through `kos-cmake` and installed port-style
+  in `$KOS_PORTS`): all objects compile without a warning (`-Wall`), `-O3` reaches the three hot
+  units only, `-lsh4zam` links,
+  `battle.elf` is produced; the `SH4ZAM_DIR` route builds `build/sh4zam-kos/libsh4zam.a` and links
+  it; a missing port stops with the install instructions. SH4ZAM's C++ headers were also compiled at
+  `-std=gnu++14`, which fails inside `shz_cdefs.h` (C++17 traits), hence the makefile's explicit
+  `-std=gnu++17`.
+* **No assembly in the project.** PREF and MOVCA.L come only from SH4ZAM's `SHZ_PREFETCH` and
+  `shz_dcache_alloc_line`; `grep -rnE '\basm\b|__asm' src platform makefile` finds nothing.
+
+### 8.6 On the hardware
+
+The build already carries the probe: `make DIAG=1` prints the worst CPU frame and the number of
+frames over 16.7 ms every 300 frames. The loop presents at most 60 frames per second (§4.4), so
+this pass shows as frame-time headroom, and as 60 instead of 30 fps wherever a frame was just over
+budget. It does not change the KOS side: the PVR submission, which reads the arena back through the
+store queues, is untouched, as §6.4 explains.

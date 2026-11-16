@@ -63,6 +63,8 @@ Edit the table in `src/encounters.cpp`:
 
 ## 4. Add a skill
 
+(For the 3D battle a skill also needs a sequence: §11.)
+
 1. In `src/skills.cpp`, write `resolve` (rules: damage, statuses; return a `SkillResult`) and, optionally, `present` (animation and floating text only). Add a row to `SKILLS[]` and a value to `SkillIndex` in `skills.h`.
 2. Target modes: `Self`, `EnemySingle` (the player picks a target), `EnemyAll` (AOE, targets chosen automatically), `AllyAll`, `None`.
 3. To make it selectable, the command ring in `src/ui.cpp` currently has 3 fixed slots (`RING_ICON[]`, `home_i` 0..2). Adding a 4th slot means extending the wrap arithmetic and the `ui_update` branches.
@@ -101,7 +103,7 @@ The 3D slice adds `tests/slice3d/run.sh` (see `docs/SLICE_3D_1.md` §6): runtime
 
 **SH4ZAM (required since the SH4ZAM slice).** The 3D math runs on the SH4ZAM library; see §10. Install its KallistiOS port once (DreamSDK Manager > KallistiOS Ports > SH4ZAM; or `cd $KOS_PORTS/sh4zam && make install`), or build against a checkout with `make SH4ZAM_DIR=<path>`. The host build (`make host`, `tests/run_tests.sh`) needs a checkout and CMake: it finds `SH4ZAM_DIR`, `external/sh4zam` or `../sh4zam/sh4zam`.
 
-**Battle controls.** Command ring: ◀▶ choose, A select, Y jumps to Guard. Attack → pick a target (◀▶, A), B back. Fire → confirm step with every enemy marked (A cast), B back. Guard casts immediately.
+**Battle controls.** Command ring: ◀▶ choose (Attack, Fire, Guard, Potion), A select, Y jumps to Guard. Attack → pick a target (◀▶ in screen order, A), B back. Fire → confirm step with every enemy marked (A cast), B back. Guard casts immediately; Potion too (greyed with none left). During a sequence, hold A to play it at 2x; A skips the battle intro.
 
 ## 8. The 3D village (field)
 
@@ -214,3 +216,67 @@ When you touch the 3D code:
 * **`shz_invf_fsrra(W)` needs W > 0**: the vertex paths clamp W to `near_w` first. `shz_sincosf` takes angles in 1/65536 turns (about 0.0055° steps). `shz_fminf`/`shz_fmaxf`/`shz_clampf` are NaN-aware library calls on the SH4 without `-ffast-math`: keep plain compares in loops.
 * **Vertex writes**: a whole 32-byte vertex written to the arena or to `g_xv` goes through `put_vert()` (MOVCA.L first). Use `shz_dcache_alloc_line` only when all 32 bytes of the line are then written.
 * **Check on the SH4 path as well as the host.** `tests/sh4zam/` runs the real SH4 code under qemu: logic traces, `tools/compare_frames.py` against a reference build's frame dumps, and instruction counts (`tests/sh4zam/README.md`).
+
+## 11. The 3D battle (slice 3D-4)
+
+Read `docs/SLICE_3D_BATTLE.md` first. The battle's rules are untouched by the presentation: the
+state machine (`src/battle.cpp`) pushes events, `src/battle3d.cpp` turns them into sequences and says
+when it is busy. Rule changes go in `skills.cpp` / `ai.cpp` / `status.cpp` as before.
+
+**Run and look at a battle on the host:**
+```sh
+make host
+./build/battle_trace_f32 - /tmp/t.trace --battle-test test_slimes --state-only --bot cycle:AFG --bot-wait 120 \
+    --view --dump /tmp/frames --dump-every 5                     # the bot plays; every 5th frame dumped
+python3 tools/battle3d/review.py /tmp/t.trace /tmp/frames /tmp/review.jpg   # one row per sequence
+python3 tools/render_frame.py /tmp/frames/frame_00300.txt romdisk /tmp/f.png
+```
+`--bot` policies: `attack:K`, `fire`, `guard`, `cycle:SEQ` (`A F G Y P 1 2 3 b c`), `random:SEED`,
+`boss:good|naive|noguard:SEED` (`platform/host/battle_bot.cpp`). `--view2d` plays the old sprite
+battle, `--rules legacy` switches the slice's rule additions off.
+
+**Add a sequence for a new skill.** In `battle3d.cpp`: write `build_<skill>(Seq&, View& user, ...)`
+that adds cues - `cue(s, tick, OP_..., actor, a, b, f, point)` - and dispatch it in `start_seq()` on
+`ev.skill`. Useful ops: `OP_PLAY` (a clip, fade, then), `OP_MOVE` + `OP_FACE*` (running), `OP_CAM`
+(a shot), `OP_IMPACT k` (hit k of the event lands: shown HP, number, flash, reaction, death),
+`OP_LAUNCH k` (a projectile; its arrival is the impact), `OP_BURST`, `OP_END`. Take timings from the
+clip: `anim::clip_event(lib, clip, anim::EV_IMPACT)` and `anim::clip_ticks()`. The sequence ends when
+`OP_END` has fired, nobody is still moving, no projectile flies and every actor it killed has hit
+the ground. Keep everything that decides *when* it ends in integer ticks (the rules wait for it).
+
+**Add an enemy look.** Add a `LOOK_*` (`encounters.h`) and a `K_*` row in `KINDS[]`
+(`battle3d.cpp`): model, scale, weapons per hand slot, clip names, ranged or not, head height for
+the HUD. Set the look in the encounter table. A new KayKit character: convert it (below), check it
+with `qc_model.py`, add it to `build_assets.sh`.
+
+**Convert a character or a weapon** (Blender's Python, see §9):
+```sh
+$BPY tools/battle3d/convert_model.py --fbx ../KayKit/Characters/Skeleton_Rogue.fbx \
+    --texture ../KayKit/Characters/skeleton_texture.png --tris 800 --glow-color 9CF0FF --out romdisk/models/skel_rogue.dmf
+$BPY tools/battle3d/convert_model.py --weapon --fbx ../KayKit/Weapons/Skeleton_Blade.fbx \
+    --texture ../KayKit/Characters/skeleton_texture.png --tris 90 --out romdisk/models/w_skel_blade.dmf
+# QC against a full-resolution conversion of the same FBX (--tris 100000 --dissolve 0 --tex-size 256):
+python3 tools/battle3d/qc_model.py /tmp/ref.dmf romdisk/models/skel_rogue.dmf --sheet /tmp/qc.jpg
+```
+Weapons are drawn with their holder's texture (the KayKit weapons share their character's atlas),
+so they cost no VRAM. Attach them in `KINDS[]` (`handslot.r` / `handslot.l`).
+
+**Add or change a clip.** Add a row to `CLIPS` in `tools/battle3d/build_anims.py` (library name, pack,
+action, loop, event rule, optional event override) and rebuild (`build_assets.sh`). Check it with
+`python3 tools/battle3d/clip_sheet.py romdisk/models/knight.dmf /tmp/c.jpg CLIPNAME --weapon
+handslot.r=romdisk/models/w_sword.dmf` (event frames are marked).
+
+**Edit an arena.** `romdisk/arenas/<name>.txt` (format at the top of `village.txt`): props, light,
+sky, ground, hero and enemy slots (left to right on screen!), camera shots. An encounter picks its
+arena (`EncounterDef.arena`). Keep the worst frame within budget: `tests/battle3d/run.sh` checks
+<= 14,000 submitted vertices; `B` lines (`--view`) break a frame down (chars, weapons, ground, props,
+fx). If the battle cameras change, rebuild the view-culled houses (`VIEW_CULL=1 build_assets.sh`).
+
+**The boss.** `ai.cpp`: the rotation tables and overrides (GDD App. C). Stats in `encounters.cpp`,
+Soul Rend's power in `skills.cpp`. After any change: `tests/battle3d/boss_balance.sh 100` (targets
+in `docs/SLICE_3D_BATTLE.md` §3), `python3 tools/battle3d/boss_tune.py` to search, and
+`python3 tests/battle3d/check_rules.py` over fresh logs (update its model if the rules changed).
+
+**Tests.** `tests/battle3d/run.sh` (`QUICK=1`, `BPY=`, `SH4=1`). If the rules change on purpose for
+the legacy encounters, the baselines no longer apply: they came from the pre-3D build
+(`tests/battle3d/record_baseline.sh`), and the equivalence test runs with `--rules legacy`.

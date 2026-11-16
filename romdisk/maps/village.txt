@@ -2,8 +2,9 @@
 #         # fence (3D fence runs between neighbouring # tiles)   T tree   ~ water   (blocking)
 # prop <model> <x> <y> <rot_deg> [solid <w> <h>]   model = romdisk/models/<model>.dmf, origin at (x, y) in tiles,
 #      rot 0 = the model's front (a house's door) faces south; a solid footprint of w x h tiles is centred on (x, y)
-# entity <id> <enemy|npc> <slime|guard> <x> <y> <facing> <encounter> [patrol <dx> <dy> <len>]
+# entity <id> <enemy|npc> <slime|guard> <x> <y> <facing> <encounter> [patrol <dx> <dy> <len>] [after <id> [<id>]]
 #      3D: slime -> skeleton warrior, guard -> skeleton mage
+#      after: dormant (not drawn, not touchable) until those entities are defeated
 name village
 map 36 28
 ####################################
@@ -62,3 +63,6 @@ prop bush           31.4   8.6    0
 entity slime_a enemy slime 12 14 down slimes_2
 entity slime_b enemy slime 21 14 left test_slimes patrol 1 0 4
 entity guard npc guard 24 6 down guard_duel
+# slice 3D-4: the Bone Warden waits at the east end of the road (the barrow gate, GDD 9/12) and wakes
+# once both skeleton patrols are down; his battle uses the barrow arena (romdisk/arenas/barrow.txt)
+entity warden enemy guard 33 14 left warden after slime_a slime_b

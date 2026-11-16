@@ -22,7 +22,7 @@ const int MAX_FLOATS  = 64;  // fx.lua `floats`
 
 enum class Team : uint8_t { Player, Enemy };
 
-enum class StatusId : uint8_t { Burn, Guard, Stun, Count };
+enum class StatusId : uint8_t { Burn, Guard, Stun, Charge, Count };   // Charge: the Warden's telegraph (GDD 12)
 
 struct StatusInst {
     StatusId id;
@@ -44,7 +44,9 @@ struct Actor {
     CharSheet   sheet;        // battle look (was a sprite handle)
     Dir         facing;
     int         hurt_ticks;   // Lua: actor._hurt_t; marker drawn while > 0
+    uint8_t     role;         // ROLE_* (slice 3D-4 boss fight): who the boss AI commands / raises
 };
+enum ActorRole : uint8_t { ROLE_NONE, ROLE_BOSS, ROLE_MINION };
 
 typedef FixedVec<Actor*, MAX_ACTORS> ActorList;
 
@@ -53,7 +55,7 @@ enum class TargetMode : uint8_t { None, Self, EnemySingle, EnemyAll, AllyAll };
 // ---- skills -------------------------------------------------------------------
 struct Hit { Actor* target; int dmg; };
 
-enum class ResultKind : uint8_t { Fail, Single, Aoe, Self, Noop };
+enum class ResultKind : uint8_t { Fail, Single, Aoe, Self, Noop, Summon };   // Summon: hits = actors raised
 
 struct SkillResult {
     bool       ok     = false;
@@ -110,6 +112,31 @@ struct Ui {
     int     target_entry_lock = 0;   // ticks
 };
 
+// ---- presentation events (slice 3D-4) ---------------------------------------
+// Rules-side facts the 3D presentation turns into sequences: pushed by the state machine (an
+// action was resolved) and by the burn hook (damage at a turn start). The rules never read them.
+enum class EvKind : uint8_t { Action, BurnTick, Crumble };   // Crumble: the boss fell, his minions collapse (hits)
+struct BattleEvent {
+    EvKind      kind;
+    Actor*      user;          // the acting actor / the burning actor
+    int         skill;         // SkillIndex (Action)
+    ResultKind  result;
+    FixedVec<Hit, MAX_ACTORS> hits;   // Single: the target; Aoe: every target hit; Self: the user (dmg 0)
+    int         dmg;           // BurnTick: damage dealt
+};
+const int MAX_EVENTS = 16;   // per tick: an action + a crumble, or one burn per actor at a turn advance
+
+// ---- the boss fight (GDD 12, slice 3D-4) ---------------------------------------
+// The Bone Warden's deterministic AI state. Inactive (boss == nullptr) in every other encounter.
+struct BossState {
+    Actor* boss = nullptr;
+    int    phase = 1;          // 1, then 2 after the transition turn
+    int    rot_i = 0;          // next rotation entry
+    int    raise_cd = 0;       // Warden turns until Raise Dead may be used again
+    int    last_skill = -1;    // SkillIndex of his previous action (Bone Ward never twice in a row)
+    bool   transition_done = false;
+};
+
 // ---- battle.lua ctx ----------------------------------------------------------
 enum class BattleState : uint8_t { Command, Resolve, Animate, TurnAdvance, Win, Lose };
 enum class BattleOutcome : uint8_t { None, Won, Lost };
@@ -129,6 +156,9 @@ struct BattleCtx {
     Presentation pres;
     Fx           fx;
     Ui           ui;
+    FixedVec<BattleEvent, MAX_EVENTS> events;  // for the 3D presentation (cleared by it, or each tick in 2D)
+    int           potions = 0;                 // the hero's potions (GDD 11.1), from/to PartyState
+    BossState     boss;
 
     BattleCtx() {}
     BattleCtx(const BattleCtx&) = delete;             // Actor* must stay valid
@@ -136,5 +166,14 @@ struct BattleCtx {
 };
 
 inline bool alive(const Actor* a) { return a && a->hp > 0; }
+
+// Rule switches (slice 3D-4 / GDD 11.1). The defaults are the game's rules; the turn-level
+// equivalence test runs `legacy` (every switch off) against baselines recorded from the sprite build.
+struct Rules {
+    bool guard_fix = true;    // Guard lasts until the START of the guarding actor's next turn
+                              // (legacy: it expired at the end of the guarding turn, before any enemy acted)
+    bool potions = true;      // 4th command: Potion (heals 12, uses one; greyed at 0). Legacy: 3 commands
+};
+Rules& rules();
 
 } // namespace bt

@@ -1,0 +1,22 @@
+ST active=hero turn_i=0 | hero:20/20 guard:18/18
+ACT 1 hero fireball -> guard
+ST active=hero turn_i=0 | hero:20/20 guard:16/18+burn2.2
+ST active=guard turn_i=1 | hero:20/20 guard:14/18+burn2.2
+ACT 2 guard attack -> hero
+ST active=guard turn_i=1 | hero:17/20 guard:14/18+burn2.2
+ST active=hero turn_i=0 | hero:17/20 guard:14/18+burn1.2
+ACT 3 hero fireball -> guard
+ST active=hero turn_i=0 | hero:17/20 guard:12/18+burn1.2+burn2.2
+ST active=guard turn_i=1 | hero:17/20 guard:8/18+burn1.2+burn2.2
+ACT 4 guard attack -> hero
+ST active=guard turn_i=1 | hero:14/20 guard:8/18+burn1.2+burn2.2
+ST active=hero turn_i=0 | hero:14/20 guard:8/18+burn1.2
+ACT 5 hero attack -> guard
+ST active=hero turn_i=0 | hero:14/20 guard:4/18+burn1.2
+ST active=guard turn_i=1 | hero:14/20 guard:2/18+burn1.2
+ACT 6 guard attack -> hero
+ST active=guard turn_i=1 | hero:11/20 guard:2/18+burn1.2
+ST active=hero turn_i=0 | hero:11/20 guard:2/18
+ACT 7 hero fireball -> guard
+ST active=hero turn_i=0 | hero:11/20 guard:0/18+burn2.2
+END outcome=won state=win

@@ -159,7 +159,16 @@ bool field_load(const char* path) {
             memset(&e, 0, sizeof e);
             char kind[16], sheet[16], d[16], enc[24], extra[16];
             int x, y, pdx = 0, pdy = 0, plen = 0;
-            int got = sscanf(line + 7, "%15s %15s %15s %d %d %15s %23s %15s %d %d %d",
+            // optional tail: `after <id> [<id>]` (slice 3D-4: the Warden wakes when both patrols are down)
+            char body[200];
+            snprintf(body, sizeof body, "%s", line + 7);
+            char* aft = strstr(body, " after ");
+            if (aft) {
+                *aft = 0;
+                e.n_after = sscanf(aft + 7, "%15s %15s", e.after[0], e.after[1]);
+                if (e.n_after < 1) { report(line_no, "bad 'after'", line); return false; }
+            }
+            int got = sscanf(body, "%15s %15s %15s %d %d %15s %23s %15s %d %d %d",
                              e.id, kind, sheet, &x, &y, d, enc, extra, &pdx, &pdy, &plen);
             if (got != 7 && got != 11) { report(line_no, "bad entity", line); return false; }
             if (strcmp(kind, "enemy") == 0) e.kind = EntityKind::Enemy;
@@ -187,6 +196,11 @@ bool field_load(const char* path) {
     for (const Entity& e : g_f.ents) {
         if (!cell_walkable(e.home_x, e.home_y)) {
             report(0, "entity not on a walkable tile:", e.id); return false;
+        }
+        for (int k = 0; k < e.n_after; ++k) {
+            bool found = false;
+            for (const Entity& o : g_f.ents) found = found || (&o != &e && strcmp(o.id, e.after[k]) == 0);
+            if (!found) { report(0, "'after' names an unknown entity:", e.after[k]); return false; }
         }
     }
     field_reset();
@@ -245,7 +259,7 @@ void field_reset() {
     h.vx = h.vy = 0; h.fx = h.fy = 0;
     for (Entity& e : g_f.ents) {
         walker_place(e.w, e.home_x, e.home_y, e.home_dir, NPC_STEP_TICKS);
-        e.alive = true; e.ppos = 0; e.psign = 1; e.pwait = PATROL_WAIT;
+        e.alive = e.n_after == 0; e.dormant = e.n_after > 0; e.ppos = 0; e.psign = 1; e.pwait = PATROL_WAIT;
     }
     g_f.contact = -1;
     update_camera();
@@ -367,7 +381,19 @@ void field_update() {
 
 int field_take_contact() { int c = g_f.contact; g_f.contact = -1; return c; }
 
-void field_defeat(int i) { if (i >= 0 && i < g_f.ents.size()) g_f.ents[i].alive = false; }
+void field_defeat(int i) {
+    if (i < 0 || i >= g_f.ents.size()) return;
+    g_f.ents[i].alive = false;
+    // dormant entities wake once everything they wait for is defeated
+    for (Entity& e : g_f.ents) {
+        if (!e.dormant) continue;
+        bool ready = true;
+        for (int k = 0; k < e.n_after; ++k)
+            for (const Entity& o : g_f.ents)
+                if (!strcmp(o.id, e.after[k]) && (o.alive || o.dormant)) ready = false;
+        if (ready) { e.dormant = false; e.alive = true; }
+    }
+}
 
 void field_entity_pixel(int i, int* px, int* py) {
     if (i < 0 || i >= g_f.ents.size()) { *px = *py = 0; return; }

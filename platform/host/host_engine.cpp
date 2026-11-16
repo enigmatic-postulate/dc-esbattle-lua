@@ -27,18 +27,20 @@ static MemTex      g_memtex[eng::MAX_SPRITES];
 
 // ---- 3D: materials + per-frame vertex arena (same limits as the KOS backend)
 struct Mat { eng::Sprite tex; int flags; };
-static Mat g_mats[128];
+static Mat g_mats[256];
 static int g_nmats = 0;
 static const int ARENA_VERTS = 16384;
 alignas(32) static eng::Vert3 g_arena[ARENA_VERTS];   // 32-byte vertices, like the PVR arena (shz_memcpy32_1 contract)
 static int g_arena_used = 0, g_open = -1, g_batches = 0, g_batch_verts = 0;
 static uint32_t g_clear = 0;
 
+static int g_drops = 0;                 // batches refused this frame (arena full), like the KOS backend's drops
 int host_arena_used() { return g_arena_used; }
+int host_drops() { return g_drops; }
 int host_batches() { return g_batches; }
 
 void host_frame_begin(int tick, bool dump) {
-    g_arena_used = 0; g_open = -1; g_batches = 0; g_batch_verts = 0;
+    g_arena_used = 0; g_open = -1; g_batches = 0; g_batch_verts = 0; g_drops = 0;
     if (dump && g_dump_dir) {
         char p[512];
         snprintf(p, sizeof p, "%s/frame_%05d.txt", g_dump_dir, tick);
@@ -85,13 +87,13 @@ Sprite texture_create(const uint16_t* texels, int w, int h, int fmt) {
 }
 
 Material material_create(Sprite tex, int flags) {
-    if (g_nmats >= 128 || tex < 0 || tex > g_nsprites) return 0;
+    if (g_nmats >= 256 || tex < 0 || tex > g_nsprites) return 0;
     g_mats[g_nmats] = Mat{ tex, flags };
     return ++g_nmats;
 }
 
 Vert3* vtx_begin(int max) {
-    if (g_open >= 0 || max <= 0 || g_arena_used + max > ARENA_VERTS) return nullptr;
+    if (g_open >= 0 || max <= 0 || g_arena_used + max > ARENA_VERTS) { if (max > 0) ++g_drops; return nullptr; }
     g_open = g_arena_used;
     return g_arena + g_arena_used;
 }

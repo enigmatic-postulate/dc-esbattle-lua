@@ -1,0 +1,23 @@
+{
+ "source": "sword_1handed.fbx",
+ "budget": 80,
+ "parts": [
+  {
+   "part": "sword_1handed",
+   "source_tris": 300,
+   "after_dissolve": 296,
+   "tris": 80,
+   "target": 80,
+   "glow": false,
+   "double_sided": false
+  }
+ ],
+ "out": "w_sword.dmf",
+ "tris": 80,
+ "verts": 103,
+ "groups": 1,
+ "strips": 27,
+ "verts_per_tri": 1.675,
+ "bytes": 12096,
+ "source_tris": 300
+}

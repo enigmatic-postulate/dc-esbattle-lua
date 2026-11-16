@@ -1,0 +1,186 @@
+{
+ "textures": {
+  "wood": {
+   "format": "rgb565",
+   "size": 128,
+   "bytes": 32768
+  },
+  "plaster": {
+   "format": "rgb565",
+   "size": 64,
+   "bytes": 8192
+  },
+  "brick": {
+   "format": "rgb565",
+   "size": 128,
+   "bytes": 32768
+  },
+  "stonewall": {
+   "format": "rgb565",
+   "size": 128,
+   "bytes": 32768
+  },
+  "rocktrim": {
+   "format": "rgb565",
+   "size": 128,
+   "bytes": 32768
+  },
+  "rooftiles": {
+   "format": "rgb565",
+   "size": 128,
+   "bytes": 32768
+  },
+  "glass": {
+   "format": "rgb565",
+   "size": 32,
+   "bytes": 2048
+  },
+  "vine": {
+   "format": "argb4444",
+   "size": 64,
+   "bytes": 8192
+  },
+  "boulder02": {
+   "format": "rgb565",
+   "size": 128,
+   "bytes": 32768
+  },
+  "boulder03": {
+   "format": "rgb565",
+   "size": 128,
+   "bytes": 32768
+  }
+ },
+ "prefabs": {
+  "arch_r90": {
+   "raw_tris": 196,
+   "decimated_tris": 118,
+   "final_tris": 116,
+   "verts": 180,
+   "strips": 34,
+   "strip_indices": 196,
+   "submeshes": 1,
+   "bytes": 5472
+  },
+  "border_r0": {
+   "raw_tris": 16,
+   "decimated_tris": 16,
+   "final_tris": 16,
+   "verts": 26,
+   "strips": 5,
+   "strip_indices": 30,
+   "submeshes": 1,
+   "bytes": 1376
+  },
+  "boulder02_r0": {
+   "raw_tris": 12245,
+   "decimated_tris": 1599,
+   "final_tris": 1210,
+   "verts": 1130,
+   "strips": 220,
+   "strip_indices": 1942,
+   "submeshes": 1,
+   "bytes": 32128
+  },
+  "boulder02_r90": {
+   "raw_tris": 12245,
+   "decimated_tris": 1599,
+   "final_tris": 1163,
+   "verts": 1148,
+   "strips": 229,
+   "strip_indices": 1903,
+   "submeshes": 1,
+   "bytes": 32480
+  },
+  "boulder03_r0": {
+   "raw_tris": 8102,
+   "decimated_tris": 899,
+   "final_tris": 653,
+   "verts": 468,
+   "strips": 93,
+   "strip_indices": 1021,
+   "submeshes": 1,
+   "bytes": 14112
+  },
+  "boulder03_r90": {
+   "raw_tris": 8102,
+   "decimated_tris": 899,
+   "final_tris": 669,
+   "verts": 462,
+   "strips": 88,
+   "strip_indices": 1009,
+   "submeshes": 1,
+   "bytes": 13984
+  },
+  "crate_r0": {
+   "raw_tris": 230,
+   "decimated_tris": 230,
+   "final_tris": 157,
+   "verts": 319,
+   "strips": 83,
+   "strip_indices": 324,
+   "submeshes": 1,
+   "bytes": 9184
+  },
+  "fence_r0": {
+   "raw_tris": 40,
+   "decimated_tris": 40,
+   "final_tris": 38,
+   "verts": 78,
+   "strips": 20,
+   "strip_indices": 78,
+   "submeshes": 1,
+   "bytes": 2752
+  },
+  "house_plaster_r0": {
+   "raw_tris": 5150,
+   "decimated_tris": 3692,
+   "final_tris": 2077,
+   "verts": 3113,
+   "strips": 696,
+   "strip_indices": 3680,
+   "submeshes": 8,
+   "bytes": 84448
+  },
+  "house_plaster_r180": {
+   "raw_tris": 5678,
+   "decimated_tris": 4138,
+   "final_tris": 2276,
+   "verts": 3447,
+   "strips": 766,
+   "strip_indices": 4038,
+   "submeshes": 7,
+   "bytes": 93344
+  },
+  "house_stone_r0": {
+   "raw_tris": 4609,
+   "decimated_tris": 3239,
+   "final_tris": 1890,
+   "verts": 2707,
+   "strips": 585,
+   "strip_indices": 3270,
+   "submeshes": 8,
+   "bytes": 73696
+  },
+  "house_stone_r180": {
+   "raw_tris": 5159,
+   "decimated_tris": 3707,
+   "final_tris": 1990,
+   "verts": 2876,
+   "strips": 623,
+   "strip_indices": 3456,
+   "submeshes": 7,
+   "bytes": 78144
+  },
+  "wagon_r0": {
+   "raw_tris": 1672,
+   "decimated_tris": 1018,
+   "final_tris": 946,
+   "verts": 1544,
+   "strips": 324,
+   "strip_indices": 1672,
+   "submeshes": 1,
+   "bytes": 41728
+  }
+ }
+}

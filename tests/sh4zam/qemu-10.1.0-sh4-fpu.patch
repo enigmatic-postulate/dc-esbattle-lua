@@ -1,0 +1,122 @@
+--- a/target/sh4/translate.c
++++ b/target/sh4/translate.c
+@@ -1574,6 +1574,10 @@
+            it is safe to simply ignore them. */
+         return;
+     case 0x0083: /* pref @Rn */
++#ifdef CONFIG_USER_ONLY
++        /* measurement aid: lets TCG plugins see the prefetched address */
++        gen_helper_pref_probe(tcg_env, REG(B11_8));
++#endif
+         return;
+     case 0x00d3: /* prefi @Rn */
+         CHECK_SH4A
+@@ -1711,7 +1715,7 @@
+         CHECK_FPU_ENABLED
+         CHECK_FPSCR_PR_0
+         gen_helper_fsrra_FT(FREG(B11_8), tcg_env, FREG(B11_8));
+-        break;
++        return;
+     case 0xf08d: /* fldi0 FRn - FPSCR: R[PR] */
+         CHECK_FPU_ENABLED
+         CHECK_FPSCR_PR_0
+@@ -1740,22 +1744,26 @@
+         return;
+     case 0xf0ed: /* fipr FVm,FVn */
+         CHECK_FPU_ENABLED
+-        CHECK_FPSCR_PR_1
++        CHECK_FPSCR_PR_0
+         {
+-            TCGv m = tcg_constant_i32((ctx->opcode >> 8) & 3);
+-            TCGv n = tcg_constant_i32((ctx->opcode >> 10) & 3);
++            TCGv m = tcg_constant_i32(((ctx->opcode >> 8) & 3) * 4);
++            TCGv n = tcg_constant_i32(((ctx->opcode >> 10) & 3) * 4);
+             gen_helper_fipr(tcg_env, m, n);
+             return;
+         }
+         break;
+-    case 0xf0fd: /* ftrv XMTRX,FVn */
++    case 0xf0fd: /* ftrv XMTRX,FVn -- or fsca FPUL,DRn (bit 8 clear) */
+         CHECK_FPU_ENABLED
+-        CHECK_FPSCR_PR_1
++        CHECK_FPSCR_PR_0
++        if ((ctx->opcode & 0x0100) == 0) {   /* fsca FPUL,DRn (SH7091 / SH4A) */
++            gen_helper_fsca(tcg_env, tcg_constant_i32(B11_8 & 0xe));
++            return;
++        }
+         {
+             if ((ctx->opcode & 0x0300) != 0x0100) {
+                 goto do_illegal;
+             }
+-            TCGv n = tcg_constant_i32((ctx->opcode >> 10) & 3);
++            TCGv n = tcg_constant_i32(((ctx->opcode >> 10) & 3) * 4);
+             gen_helper_ftrv(tcg_env, n);
+             return;
+         }
+--- a/target/sh4/op_helper.c
++++ b/target/sh4/op_helper.c
+@@ -17,9 +17,12 @@
+  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+  */
+ #include "qemu/osdep.h"
++#include <math.h>
+ #include "cpu.h"
+ #include "exec/helper-proto.h"
+ #include "accel/tcg/cpu-ldst.h"
++#include "accel/tcg/probe.h"
++#include "exec/tlb-flags.h"
+ #include "fpu/softfloat.h"
+ 
+ #ifndef CONFIG_USER_ONLY
+@@ -456,7 +459,7 @@
+     int bank, i;
+     float32 r, p;
+ 
+-    bank = (env->sr & FPSCR_FR) ? 16 : 0;
++    bank = (env->fpscr & FPSCR_FR) ? 16 : 0;
+     r = float32_zero;
+     set_float_exception_flags(0, &env->fp_status);
+ 
+@@ -478,8 +481,8 @@
+     float32 r[4];
+     float32 p;
+ 
+-    bank_matrix = (env->sr & FPSCR_FR) ? 0 : 16;
+-    bank_vector = (env->sr & FPSCR_FR) ? 16 : 0;
++    bank_matrix = (env->fpscr & FPSCR_FR) ? 0 : 16;
++    bank_vector = ((env->fpscr & FPSCR_FR) ? 16 : 0) + n;
+     set_float_exception_flags(0, &env->fp_status);
+     for (i = 0 ; i < 4 ; i++) {
+         r[i] = float32_zero;
+@@ -496,3 +499,23 @@
+         env->fregs[bank_vector + i] = r[i];
+     }
+ }
++
++/* FSCA FPUL,DRn: sine and cosine of the 16-bit binary angle in FPUL (65536 = one turn). */
++void helper_fsca(CPUSH4State *env, uint32_t n)
++{
++    int bank = (env->fpscr & FPSCR_FR) ? 16 : 0;
++    double a = (double)(env->fpul & 0xffff) * (6.283185307179586 / 65536.0);
++    union { float f; uint32_t u; } s = { (float)sin(a) }, c = { (float)cos(a) };
++    env->fregs[bank + n] = make_float32(s.u);
++    env->fregs[bank + n + 1] = make_float32(c.u);
++}
++
++/* PREF @Rn (measurement aid): a non-faulting one-byte load, so that TCG plugins see the address. */
++void helper_pref_probe(CPUSH4State *env, uint32_t addr)
++{
++    void *host;
++    int flags = probe_access_flags(env, addr, 1, MMU_DATA_LOAD, MMU_USER_IDX, true, &host, GETPC());
++    if (!(flags & TLB_INVALID_MASK)) {
++        (void)cpu_ldub_data_ra(env, addr, GETPC());
++    }
++}
+--- a/target/sh4/helper.h
++++ b/target/sh4/helper.h
+@@ -41,3 +41,5 @@
+ DEF_HELPER_FLAGS_2(ftrc_DT, TCG_CALL_NO_WG, i32, env, f64)
+ DEF_HELPER_3(fipr, void, env, i32, i32)
+ DEF_HELPER_2(ftrv, void, env, i32)
++DEF_HELPER_2(fsca, void, env, i32)
++DEF_HELPER_2(pref_probe, void, env, i32)

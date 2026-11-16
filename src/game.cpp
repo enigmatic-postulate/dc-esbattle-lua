@@ -35,6 +35,13 @@ const char* game_mode_name() {
     return "?";
 }
 
+// An encounter may set the hero up (the boss: max HP 30 and a full heal - Wren's blessing - and three
+// potions - the barrow waystone; stand-ins until the quest of the horizontal slice exists).
+static void apply_encounter_setup(PartyState& p, const EncounterDef& e) {
+    if (e.hero_max_hp > 0) { if (p.hero_hp_max < e.hero_max_hp) p.hero_hp_max = e.hero_max_hp; p.hero_hp = p.hero_hp_max; }
+    if (e.potions > p.potions) p.potions = e.potions;
+}
+
 static void load_common_assets() {
     icons_init();
     font_init();
@@ -64,6 +71,7 @@ void game_init_battle_test(const char* encounter_id) {
     g_battle_test = true;
     const EncounterDef* enc = encounter_by_id(encounter_id);
     if (!enc) { g_mode = GameMode::Error; return; }
+    apply_encounter_setup(g_party, *enc);
     battle_begin(*enc, g_party);
     g_mode = GameMode::Battle;
     g_fade_in = 0;
@@ -84,6 +92,7 @@ void game_tick() {
         field3d_tick();                                  // keeps idling/settling under the fade
         if (++g_trans >= T_FADE_OUT) {
             const EncounterDef* enc = encounter_by_id(field_state().ents[g_pending].encounter);
+            apply_encounter_setup(g_party, *enc);
             battle_begin(*enc, g_party);    // validated at map load
             g_mode = GameMode::Battle;
             g_fade_in = T_FADE_IN;
@@ -98,6 +107,7 @@ void game_tick() {
         if (++g_trans >= T_FADE_OUT) {
             if (battle_outcome() == BattleOutcome::Won) {
                 g_party.hero_hp = battle_hero_hp();      // HP carries over
+                g_party.potions = battle_potions();
                 field_defeat(g_pending);
                 g_mode = GameMode::Field;
             } else {

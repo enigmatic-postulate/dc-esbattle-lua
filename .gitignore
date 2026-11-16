@@ -3,3 +3,5 @@
 *.elf
 build/sh4zam-host/
 build/sh4zam-kos/
+build/
+results/

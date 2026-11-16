@@ -164,3 +164,27 @@ What changed after the report (VS2 fix-up):
   what it used (~1.8 MiB per bank with 1 MiB vertices), so it cannot overlap textures; `pvr_init`
   has returned before the `FOUND:` lines are printed. `make PVR_DEFAULTS=1` switches back to
   `pvr_init_defaults()` for an A/B test.
+
+---
+
+# 3D battle (slice 3D-4): what to look at if the battle misbehaves
+
+Serial lines (always on, from `dbg_print` / `boot_log`):
+
+| Line | Meaning |
+|---|---|
+| `FOUND: /rd/anims/rig_medium.dma`, `/rd/arenas/village.txt`, `/rd/arenas/barrow.txt`, `/rd/tex/fx.tex` ... | the romdisk has the battle's files. `MISSING` = rebuild the romdisk (`make clean && make`) |
+| `anim: /rd/anims/rig_medium.dma ok: 28 clips, 23 bones, 258112 bytes` | the clip library passed validation |
+| `anim: ... rejected: <reason>` | corrupt or from a newer builder: the battle still plays (the rules never need it) but nothing animates |
+| `arena village: 20 props (...)`, `arena barrow: 23 props (...)` | both arenas parsed; `arena ...:N: bad line` names the line |
+| `battle3d: ready=1 (library 1, arena 1), model arena N KiB` | everything the battle needs is loaded. `ready=0`: see the lines above |
+| `material limit reached` / `sprite limit reached` | the KOS backend's tables are full (256 materials, 32 textures; the game uses 124 and 19) |
+
+| Symptom | Likely cause | Next step |
+|---|---|---|
+| The battle hangs on an action (nothing moves, no menu) | a sequence never ends, so the rules keep waiting (`battle3d_busy()`) | host-replay the same inputs and read the `B` lines (`--view`): `seq=` / `t=` show the stuck sequence. The host suite (`tests/battle3d/run.sh`) plays hundreds of battles to the end; report the inputs |
+| Glows, sparks, fire and the selection rings are dark or opaque squares | additive blending not applied (`MAT_ADDITIVE`) | `material_create` in `platform/kos/main.cpp` sets `cxt.blend.src = PVR_BLEND_SRCALPHA; cxt.blend.dst = PVR_BLEND_ONE` on a TR material. Check the KOS version's `pvr_poly_cxt_t`; as a stopgap drop `MAT_ADDITIVE` from `g_fx_add` in `battle3d_draw.cpp` (plain alpha blending, dimmer glows) |
+| Skeletons flash as solid white silhouettes for long | the hit flash (an untextured white copy, 2 frames) stuck | it lasts `flash` ticks (`battle3d.cpp` `impact()`); host-render the frames around the hit |
+| Parts of the village houses missing in the battle | the view-culled `house_*_b.dmf` don't cover a camera the game now uses | rebuild them (`VIEW_CULL=1 tools/battle3d/build_assets.sh`), or point `romdisk/arenas/village.txt` back at `house_*_r0` |
+| `drops > 0` in the DIAG frame report during battles | the vertex arena (16,384) is full | the worst battle frame is 13.9k on the host; compare the `B` lines' `out=` (`tests/battle3d/run.sh` budget check) |
+| Frame rate below 60 in battle | CPU over budget | the SH4 build measured 0.98 M instructions median, 1.34 M worst (`tests/battle3d/sh4_budget.sh`), as the field's; `DIAG=1`'s `worst CPU frame` should stay below ~9 ms. Otherwise send the DIAG log with the battle it came from |

@@ -1,0 +1,23 @@
+{
+ "source": "Skeleton_Shield_Large_A.fbx",
+ "budget": 120,
+ "parts": [
+  {
+   "part": "skeleton_shield_large_a",
+   "source_tris": 626,
+   "after_dissolve": 620,
+   "tris": 119,
+   "target": 120,
+   "glow": false,
+   "double_sided": false
+  }
+ ],
+ "out": "w_skel_shield.dmf",
+ "tris": 119,
+ "verts": 205,
+ "groups": 1,
+ "strips": 65,
+ "verts_per_tri": 2.092,
+ "bytes": 15648,
+ "source_tris": 626
+}

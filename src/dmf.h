@@ -66,7 +66,16 @@ struct Model {
 bool parse(const void* data, int size, Model* out, char* err, int errlen);
 // Reads /rd/... into the model arena, validates, uploads the embedded texture and loads the shared
 // textures its materials reference (cached by path). false (and a log line) on error.
-bool load(const char* path, Model* out);
+// Every loaded image is followed by LOOKAHEAD_PAD zero bytes, for the renderer's cache prefetching
+// (SHZ_PREFETCH): its strip loops read the index two words ahead in a batch's strip words, which
+// at the end of the last strip is up to two words past the strip data - the padding makes those
+// reads land in the arena and yield index 0 - and its other lookaheads (strip words 32 bytes
+// ahead, vertices two ahead) stay within the image and this padding.
+const int LOOKAHEAD_PAD = 64;
+// upload_texture = false: the embedded texture is kept in RAM but not uploaded (texture = 0; the
+// caller supplies a texture, e.g. a weapon drawn with its holder's atlas). Embedded textures
+// identical to one already uploaded (the three skeletons share one atlas) reuse its handle.
+bool load(const char* path, Model* out, bool upload_texture = true);
 int  loaded_bytes();                       // arena bytes in use (DIAG / tests)
 // Shared texture by romdisk path (PNG; alpha = ARGB1555 for the TR list), loaded once and cached.
 // `path` must stay valid for the session (a string literal or a path inside a loaded model).
@@ -81,5 +90,8 @@ void pose_sample(const Model& m, int anim, float t_sec, Pose* out);
 void pose_blend(Pose* a, const Pose& b, int num_bones, float w);    // a = mix(a, b, w)
 // Skin matrices per bone: world(b) * inv_bind(b), in model space.
 void pose_skin(const Model& m, const Pose& p, r3d::Mat34* skin_out);
+// The same, also returning each bone's model-space world matrix (attachments: a weapon rides its
+// hand slot's world matrix).
+void pose_skin_world(const Model& m, const Pose& p, r3d::Mat34* skin_out, r3d::Mat34* world_out);
 
 } // namespace dmf

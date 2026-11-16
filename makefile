@@ -3,9 +3,9 @@
 #
 TARGET = battle.elf
 
-SRC_OBJS = src/assets.o src/battle.o src/chars.o src/combat.o src/dmf.o src/encounters.o src/field.o \
+SRC_OBJS = src/ai.o src/anim.o src/arena.o src/assets.o src/battle.o src/battle3d.o src/battle3d_draw.o src/chars.o src/combat.o src/dmf.o src/encounters.o src/field.o \
            src/field3d.o src/font.o src/fx.o src/game.o src/hpbar.o src/icons.o src/input.o \
-           src/input_probe.o src/presentation.o src/render3d.o src/skills.o src/status.o \
+           src/input_probe.o src/models.o src/presentation.o src/render3d.o src/skills.o src/status.o \
            src/targeting.o src/turn_system.o src/ui.o
 OBJS = platform/kos/main.o $(SRC_OBJS) romdisk.o
 
@@ -39,11 +39,14 @@ endif
 ifndef SHZ_DEBUG
 KOS_CFLAGS   += -DNDEBUG
 endif
+# SH4ZAM's C++ headers need C++17. GCC 11 and newer default to it (DreamSDK's GCC 13 does); this
+# keeps older toolchains (GCC 9/10 default to C++14) from failing inside the library's headers.
+CXXFLAGS     += -std=gnu++17
 
 # The 3D hot paths at -O3, the rest at the KOS default (SH4ZAM's optimisation guide). Measured on
 # the SH4 code: about 5% fewer instructions per field frame. make HOT_OPT= builds them at -O2.
 HOT_OPT ?= -O3
-src/render3d.o src/field3d.o src/dmf.o: CXXFLAGS += $(HOT_OPT)
+src/render3d.o src/field3d.o src/dmf.o src/anim.o src/arena.o src/battle3d_draw.o: CXXFLAGS += $(HOT_OPT)
 
 # Header dependencies: every .o gets a .d listing the headers it includes, so editing a header
 # (e.g. src/field.h) rebuilds every object that uses it. Without this a plain `make` after an
@@ -139,8 +142,8 @@ $(HOST_SHZ_LIB):
 .PHONY: host
 host: $(HOST_SHZ_LIB)
 	mkdir -p build
-	$(HOST_CXX) -O2 -Wall -Wextra $(HOST_SHZ_FLAGS) -DBATTLE_REAL_DOUBLE src/*.cpp platform/host/host_engine.cpp platform/host/trace_main.cpp $(HOST_SHZ_LIB) -o build/battle_trace_f64
-	$(HOST_CXX) -O2 -Wall -Wextra $(HOST_SHZ_FLAGS) src/*.cpp platform/host/host_engine.cpp platform/host/trace_main.cpp $(HOST_SHZ_LIB) -o build/battle_trace_f32
+	$(HOST_CXX) -O2 -Wall -Wextra $(HOST_SHZ_FLAGS) -DBATTLE_REAL_DOUBLE src/*.cpp platform/host/host_engine.cpp platform/host/trace_main.cpp platform/host/battle_bot.cpp $(HOST_SHZ_LIB) -o build/battle_trace_f64
+	$(HOST_CXX) -O2 -Wall -Wextra $(HOST_SHZ_FLAGS) src/*.cpp platform/host/host_engine.cpp platform/host/trace_main.cpp platform/host/battle_bot.cpp $(HOST_SHZ_LIB) -o build/battle_trace_f32
 	$(HOST_CXX) -O2 $(HOST_SHZ_FLAGS) src/*.cpp platform/bench/bench_main.cpp $(HOST_SHZ_LIB) -o build/bench_f32
 
 # Prints the host compile flags for SH4ZAM (used by tests/run_tests.sh).

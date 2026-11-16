@@ -50,6 +50,7 @@ struct FixedVec {
         return true;
     }
     void swap_remove(int i) { data[i] = data[n - 1]; --n; }
+    void erase_first() { for (int i = 1; i < n; ++i) data[i - 1] = data[i]; if (n) --n; }   // FIFO pop (order kept)
 };
 
 } // namespace bt

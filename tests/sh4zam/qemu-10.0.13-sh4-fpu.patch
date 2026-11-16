@@ -1,0 +1,77 @@
+--- a/target/sh4/translate.c	2026-08-26 19:31:26.000000000 +0000
++++ b/target/sh4/translate.c	2026-11-15 07:53:37.654188655 +0000
+@@ -1712,7 +1712,7 @@
+         CHECK_FPU_ENABLED
+         CHECK_FPSCR_PR_0
+         gen_helper_fsrra_FT(FREG(B11_8), tcg_env, FREG(B11_8));
+-        break;
++        return;
+     case 0xf08d: /* fldi0 FRn - FPSCR: R[PR] */
+         CHECK_FPU_ENABLED
+         CHECK_FPSCR_PR_0
+@@ -1749,9 +1749,13 @@
+             return;
+         }
+         break;
+-    case 0xf0fd: /* ftrv XMTRX,FVn */
++    case 0xf0fd: /* ftrv XMTRX,FVn -- or fsca FPUL,DRn (bit 8 clear) */
+         CHECK_FPU_ENABLED
+         CHECK_FPSCR_PR_0
++        if ((ctx->opcode & 0x0100) == 0) {   /* fsca FPUL,DRn (SH7091 / SH4A) */
++            gen_helper_fsca(tcg_env, tcg_constant_i32(B11_8 & 0xe));
++            return;
++        }
+         {
+             if ((ctx->opcode & 0x0300) != 0x0100) {
+                 goto do_illegal;
+--- a/target/sh4/op_helper.c	2026-08-26 19:31:26.000000000 +0000
++++ b/target/sh4/op_helper.c	2026-11-15 07:55:55.336170654 +0000
+@@ -17,6 +17,7 @@
+  * License along with this library; if not, see <http://www.gnu.org/licenses/>.
+  */
+ #include "qemu/osdep.h"
++#include <math.h>
+ #include "cpu.h"
+ #include "exec/helper-proto.h"
+ #include "exec/exec-all.h"
+@@ -462,7 +463,7 @@
+     int bank, i;
+     float32 r, p;
+ 
+-    bank = (env->sr & FPSCR_FR) ? 16 : 0;
++    bank = (env->fpscr & FPSCR_FR) ? 16 : 0;
+     r = float32_zero;
+     set_float_exception_flags(0, &env->fp_status);
+ 
+@@ -484,8 +485,8 @@
+     float32 r[4];
+     float32 p;
+ 
+-    bank_matrix = (env->sr & FPSCR_FR) ? 0 : 16;
+-    bank_vector = (env->sr & FPSCR_FR) ? 16 + n : n;
++    bank_matrix = (env->fpscr & FPSCR_FR) ? 0 : 16;
++    bank_vector = (env->fpscr & FPSCR_FR) ? 16 + n : n;
+     set_float_exception_flags(0, &env->fp_status);
+     for (i = 0 ; i < 4 ; i++) {
+         r[i] = float32_zero;
+@@ -502,3 +503,13 @@
+         env->fregs[bank_vector + i] = r[i];
+     }
+ }
++
++/* FSCA FPUL,DRn: sine and cosine of the 16-bit binary angle in FPUL (65536 = one turn). */
++void helper_fsca(CPUSH4State *env, uint32_t n)
++{
++    int bank = (env->fpscr & FPSCR_FR) ? 16 : 0;
++    double a = (double)(env->fpul & 0xffff) * (6.283185307179586 / 65536.0);
++    union { float f; uint32_t u; } s = { (float)sin(a) }, c = { (float)cos(a) };
++    env->fregs[bank + n] = make_float32(s.u);
++    env->fregs[bank + n + 1] = make_float32(c.u);
++}
+--- a/target/sh4/helper.h	2026-08-26 19:31:26.000000000 +0000
++++ b/target/sh4/helper.h	2026-11-15 07:53:37.654710252 +0000
+@@ -41,3 +41,4 @@
+ DEF_HELPER_FLAGS_2(ftrc_DT, TCG_CALL_NO_WG, i32, env, f64)
+ DEF_HELPER_3(fipr, void, env, i32, i32)
+ DEF_HELPER_2(ftrv, void, env, i32)
++DEF_HELPER_2(fsca, void, env, i32)

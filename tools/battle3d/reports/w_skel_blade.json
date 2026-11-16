@@ -1,0 +1,23 @@
+{
+ "source": "Skeleton_Blade.fbx",
+ "budget": 90,
+ "parts": [
+  {
+   "part": "skeleton_blade",
+   "source_tris": 457,
+   "after_dissolve": 455,
+   "tris": 89,
+   "target": 90,
+   "glow": false,
+   "double_sided": false
+  }
+ ],
+ "out": "w_skel_blade.dmf",
+ "tris": 89,
+ "verts": 145,
+ "groups": 1,
+ "strips": 45,
+ "verts_per_tri": 2.011,
+ "bytes": 13536,
+ "source_tris": 457
+}
