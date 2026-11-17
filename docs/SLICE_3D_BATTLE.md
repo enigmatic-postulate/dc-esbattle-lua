@@ -44,7 +44,7 @@ a potion, and his end.*
   13,957). Compiled with the DreamSDK flags and run under qemu with SH4ZAM's SH4 back-end, every
   battle's median frame is 0.76-0.98 M instructions and its worst 0.98-1.34 M - inside the field's
   envelope (median 0.95 M, worst 1.33 M); with the operand-cache model that is 4.3-6.0 ms median and
-  at most 8.2 ms, about half of a 60 fps frame. **Not yet run on a Dreamcast** (§8).
+  at most 8.2 ms, about half of a 60 fps frame. **Since run on a physical Dreamcast and on Flycast: it works on both** (§8).
 * **It plays end to end:** walk into the north-east patrol, then the road patrol; the Warden wakes
   at the east end of the road once both are down; beat him; back on the field. A test does exactly
   that with a field walker and the battle bot.
@@ -258,7 +258,10 @@ the enemies' screen positions).
 
 ## 8. Not done / to check on hardware
 
-* **No Dreamcast run, no DreamSDK build.** The game code compiles for SH4 with the DreamSDK flags
+* **Hardware (update):** built with DreamSDK and run on a physical Dreamcast and on Flycast; it works
+  on both and looks better on hardware than on Flycast. Still open: `DIAG` frame-time logs to replace the
+  qemu model numbers. The original note follows.
+* *(original)* **No Dreamcast run, no DreamSDK build.** The game code compiles for SH4 with the DreamSDK flags
   (GCC 13.2 `sh-elf`, SH4ZAM's SH4 back-end) and runs under qemu; `platform/kos/main.cpp` could not be
   compiled without KOS headers. Its changes are small: `MAT_ADDITIVE` sets `cxt.blend.src =
   PVR_BLEND_SRCALPHA; cxt.blend.dst = PVR_BLEND_ONE` on a TR material, 256 materials, 512 batches, and
