@@ -1,0 +1,217 @@
+  PASS fireball_win.ms60.1  OK 2401 frames 37827 calls max|d|=0.000442 alpha_d=1
+  PASS fireball_win.jitter.1  OK 2401 frames 36135 calls max|d|=0.000279 alpha_d=1
+  PASS fireball_win.dyadic.1  OK 2401 frames 38211 calls max|d|=0.000659 alpha_d=0
+  PASS attack_win.ms60.1  OK 2401 frames 40153 calls max|d|=0.000241 alpha_d=1
+  PASS attack_win.jitter.1  OK 2401 frames 38839 calls max|d|=0.000142 alpha_d=1
+  PASS attack_win.dyadic.1  OK 2401 frames 40363 calls max|d|=0.000453 alpha_d=0
+  PASS guard_lose.ms60.1  OK 2401 frames 40973 calls max|d|=0.000278 alpha_d=1
+  PASS guard_lose.jitter.1  OK 2401 frames 39429 calls max|d|=9.7e-05 alpha_d=1
+  PASS guard_lose.dyadic.1  OK 2401 frames 41255 calls max|d|=0.000327 alpha_d=0
+  PASS cancel.ms60.1  OK 2401 frames 38623 calls max|d|=0.000437 alpha_d=1
+  PASS cancel.jitter.1  OK 2401 frames 36424 calls max|d|=0.000183 alpha_d=1
+  PASS cancel.dyadic.1  OK 2401 frames 39007 calls max|d|=0.000659 alpha_d=0
+  PASS hold_a.ms60.1  OK 2401 frames 36793 calls max|d|=0.000271 alpha_d=1
+  FAIL hold_a.jitter.1
+       DIVERGENCE at frame 439 call #23: text
+           lua: R TR 462.691921 167.6 6 2 B6FFE060 2
+           cpp: R TR 462.691895 167.599976 6 2 B6FFE060 2
+           lua: R TR 460.691921 145.6 2 10 B6FFE060 2
+           cpp: R TR 460.691895 145.599976 2 10 B6FFE060 2
+           lua: R TR 462.691921 155.6 6 2 B6FFE060 2
+           cpp: R TR 462.691895 155.599976 6 2 B6FFE060 2
+        >> lua: X turn_advance active=hero turn=1 order=hero,slime_a,slime_b,slime_c hero:8[] slime_a:2[] slime_b:7[] slime_c:12[]
+        >> cpp: X animate active=hero turn=1 order=hero,slime_a,slime_b,slime_c hero:8[] slime_a:2[] slime_b:7[] slime_c:12[]
+  PASS hold_a.dyadic.1  OK 2401 frames 37007 calls max|d|=0.000453 alpha_d=0
+  PASS lock_edge.ms60.1  OK 2401 frames 36631 calls max|d|=0.000207 alpha_d=1
+  FAIL lock_edge.jitter.1
+       DIVERGENCE at frame 223 call #24: text
+           lua: R TR 187.622522 192.858 6 2 36FFE060 2
+           cpp: R TR 187.622559 192.857956 6 2 36FFE060 2
+           lua: R TR 185.622522 182.858 2 10 36FFE060 2
+           cpp: R TR 185.622559 182.857956 2 10 36FFE060 2
+           lua: R TR 187.622522 180.858 6 2 36FFE060 2
+           cpp: R TR 187.622559 180.857956 6 2 36FFE060 2
+        >> lua: X turn_advance active=slime_c turn=4 order=hero,slime_a,slime_b,slime_c hero:4[] slime_a:0[] slime_b:12[] slime_c:12[]
+        >> cpp: X animate active=slime_c turn=4 order=hero,slime_a,slime_b,slime_c hero:4[] slime_a:0[] slime_b:12[] slime_c:12[]
+  PASS lock_edge.dyadic.1  OK 2401 frames 37039 calls max|d|=0.000453 alpha_d=0
+  PASS fuzz.ms60.1  OK 3001 frames 47580 calls max|d|=0.00053 alpha_d=1
+  PASS fuzz.jitter.1  OK 3001 frames 51421 calls max|d|=0.00018 alpha_d=1
+  PASS fuzz.dyadic.1  OK 3001 frames 53927 calls max|d|=0.000594 alpha_d=0
+  PASS fuzz.ms60.2  OK 3001 frames 45681 calls max|d|=0.000442 alpha_d=1
+  PASS fuzz.jitter.2  OK 3001 frames 44995 calls max|d|=0.000204 alpha_d=1
+  PASS fuzz.dyadic.2  OK 3001 frames 46065 calls max|d|=0.000659 alpha_d=0
+  PASS fuzz.ms60.3  OK 3001 frames 48398 calls max|d|=0.000442 alpha_d=1
+  FAIL fuzz.jitter.3
+       DIVERGENCE at frame 114 call #12: rgb
+           lua: S /rd/plasma.png 152 195.306312 27.9 27.9 0 0
+           cpp: S /rd/plasma.png 152 195.306305 27.8999996 27.8999996 0 0
+           lua: S /rd/plasma.png 180 195.306312 18 18 0 0
+           cpp: S /rd/plasma.png 180 195.306305 18 18 0 0
+           lua: S /rd/plasma.png 208 195.306312 18 18 0 0
+           cpp: S /rd/plasma.png 208 195.306305 18 18 0 0
+        >> lua: R TR 464.410983 135.956 6 2 74FFA040 2
+        >> cpp: R TR 458.0672 239.799988 4 4 0080D0FF 2
+           lua: R TR 470.410983 137.956 2 10 74FFA040 2
+           cpp: R TR 466.0672 239.799988 4 4 0080D0FF 2
+           lua: R TR 464.410983 159.956 6 2 74FFA040 2
+  PASS fuzz.dyadic.3  OK 3001 frames 53605 calls max|d|=0.000603 alpha_d=0
+  PASS fuzz.ms60.4  OK 3001 frames 75120 calls max|d|=0.000431 alpha_d=1
+  PASS fuzz.jitter.4  OK 3001 frames 74136 calls max|d|=0.000191 alpha_d=1
+  PASS fuzz.dyadic.4  OK 3001 frames 74631 calls max|d|=0.000469 alpha_d=0
+  PASS fuzz.ms60.5  OK 3001 frames 50418 calls max|d|=0.000278 alpha_d=1
+  PASS fuzz.jitter.5  OK 3001 frames 73746 calls max|d|=0.000195 alpha_d=1
+  PASS fuzz.dyadic.5  OK 3001 frames 77314 calls max|d|=0.000643 alpha_d=0
+  PASS fuzz.ms60.6  OK 3001 frames 49603 calls max|d|=0.000437 alpha_d=1
+  PASS fuzz.jitter.6  OK 3001 frames 45127 calls max|d|=0.00019 alpha_d=1
+  PASS fuzz.dyadic.6  OK 3001 frames 47499 calls max|d|=0.000659 alpha_d=0
+  PASS fuzz.ms60.7  OK 3001 frames 50362 calls max|d|=0.000278 alpha_d=1
+  PASS fuzz.jitter.7  OK 3001 frames 72982 calls max|d|=0.000156 alpha_d=1
+  PASS fuzz.dyadic.7  OK 3001 frames 75164 calls max|d|=0.000643 alpha_d=0
+  PASS fuzz.ms60.8  OK 3001 frames 75646 calls max|d|=0.000431 alpha_d=1
+  PASS fuzz.jitter.8  OK 3001 frames 48278 calls max|d|=0.000134 alpha_d=1
+  PASS fuzz.dyadic.8  OK 3001 frames 75980 calls max|d|=0.000643 alpha_d=0
+  PASS fuzz.ms60.9  OK 3001 frames 49897 calls max|d|=0.000279 alpha_d=1
+  PASS fuzz.jitter.9  OK 3001 frames 45323 calls max|d|=0.000174 alpha_d=1
+  PASS fuzz.dyadic.9  OK 3001 frames 53502 calls max|d|=0.000594 alpha_d=0
+  PASS fuzz.ms60.10  OK 3001 frames 50505 calls max|d|=0.000279 alpha_d=1
+  PASS fuzz.jitter.10  OK 3001 frames 46136 calls max|d|=0.000172 alpha_d=1
+  PASS fuzz.dyadic.10  OK 3001 frames 49960 calls max|d|=0.000643 alpha_d=0
+  PASS fuzz.ms60.11  OK 3001 frames 52755 calls max|d|=0.000442 alpha_d=1
+  FAIL fuzz.jitter.11
+       DIVERGENCE at frame 160 call #23: alpha
+           lua: R TR 181.999026 200.922 6 2 7CFFE060 2
+           cpp: R TR 181.999008 200.921967 6 2 7CFFE060 2
+           lua: R TR 179.999026 190.922 2 10 7CFFE060 2
+           cpp: R TR 179.999008 190.921967 2 10 7CFFE060 2
+           lua: R TR 181.999026 188.922 6 2 7CFFE060 2
+           cpp: R TR 181.999008 188.921967 6 2 7CFFE060 2
+        >> lua: R TR 181.52522 189.396 6 2 E8FFE060 2
+        >> cpp: R TR 180.056824 162.599915 6 2 00FFE060 2
+           lua: R TR 187.52522 191.396 2 10 E8FFE060 2
+           cpp: R TR 186.056824 164.599915 2 10 00FFE060 2
+           lua: R TR 181.52522 213.396 6 2 E8FFE060 2
+  PASS fuzz.dyadic.11  OK 3001 frames 53589 calls max|d|=0.000603 alpha_d=0
+  PASS fuzz.ms60.12  OK 3001 frames 49209 calls max|d|=0.00053 alpha_d=1
+  PASS fuzz.jitter.12  OK 3001 frames 74084 calls max|d|=0.000139 alpha_d=1
+  PASS fuzz.dyadic.12  OK 3001 frames 54033 calls max|d|=0.000594 alpha_d=0
+  PASS fuzz.ms60.13  OK 3001 frames 76817 calls max|d|=0.00044 alpha_d=1
+  PASS fuzz.jitter.13  OK 3001 frames 46245 calls max|d|=0.000237 alpha_d=1
+  PASS fuzz.dyadic.13  OK 3001 frames 77219 calls max|d|=0.000643 alpha_d=0
+  PASS fuzz.ms60.14  OK 3001 frames 47877 calls max|d|=0.000529 alpha_d=1
+  PASS fuzz.jitter.14  OK 3001 frames 74797 calls max|d|=0.000251 alpha_d=0
+  PASS fuzz.dyadic.14  OK 3001 frames 48337 calls max|d|=0.000659 alpha_d=0
+  PASS fuzz.ms60.15  OK 3001 frames 74522 calls max|d|=0.000431 alpha_d=1
+  PASS fuzz.jitter.15  OK 3001 frames 48820 calls max|d|=0.000259 alpha_d=1
+  PASS fuzz.dyadic.15  OK 3001 frames 73949 calls max|d|=0.000594 alpha_d=0
+  PASS fuzz.ms60.16  OK 3001 frames 49870 calls max|d|=0.000442 alpha_d=1
+  PASS fuzz.jitter.16  OK 3001 frames 48094 calls max|d|=0.000598 alpha_d=1
+  PASS fuzz.dyadic.16  OK 3001 frames 50254 calls max|d|=0.000659 alpha_d=0
+  PASS fuzz.ms60.17  OK 3001 frames 63236 calls max|d|=0.000397 alpha_d=1
+  FAIL fuzz.jitter.17
+       DIVERGENCE at frame 92 call #22: alpha
+           lua: R TR 182.613675 199.409999 6 2 6FFFE060 2
+           cpp: R TR 182.613693 199.409927 6 2 6FFFE060 2
+           lua: R TR 180.613675 189.409999 2 10 6FFFE060 2
+           cpp: R TR 180.613693 189.409927 2 10 6FFFE060 2
+           lua: R TR 182.613675 187.409999 6 2 6FFFE060 2
+           cpp: R TR 182.613693 187.409927 6 2 6FFFE060 2
+        >> lua: R TR 182.641064 186.456 6 2 CFFFE060 2
+        >> cpp: R TR 169.817001 162.599915 6 2 00FFE060 2
+           lua: R TR 188.641064 188.456 2 10 CFFFE060 2
+           cpp: R TR 175.817001 164.599915 2 10 00FFE060 2
+           lua: R TR 182.641064 210.456 6 2 CFFFE060 2
+  PASS fuzz.dyadic.17  OK 3001 frames 48216 calls max|d|=0.000637 alpha_d=0
+  PASS fuzz.ms60.18  OK 3001 frames 50914 calls max|d|=0.000229 alpha_d=1
+  PASS fuzz.jitter.18  OK 3001 frames 49315 calls max|d|=0.000295 alpha_d=1
+  PASS fuzz.dyadic.18  OK 3001 frames 48617 calls max|d|=0.000643 alpha_d=0
+  PASS fuzz.ms60.19  OK 3001 frames 46350 calls max|d|=0.000442 alpha_d=1
+  PASS fuzz.jitter.19  OK 3001 frames 43684 calls max|d|=0.00025 alpha_d=1
+  PASS fuzz.dyadic.19  OK 3001 frames 46734 calls max|d|=0.000659 alpha_d=0
+  PASS fuzz.ms60.20  OK 3001 frames 54166 calls max|d|=0.00053 alpha_d=1
+  PASS fuzz.jitter.20  OK 3001 frames 52050 calls max|d|=0.000199 alpha_d=1
+  PASS fuzz.dyadic.20  OK 3001 frames 54512 calls max|d|=0.000594 alpha_d=0
+  PASS fuzz.ms60.21  OK 3001 frames 47644 calls max|d|=0.00053 alpha_d=1
+  FAIL fuzz.jitter.21
+       DIVERGENCE at frame 205 call #43: rgb
+           lua: R TR 192.670083 188.909999 6 2 14FFE060 2
+           cpp: R TR 192.670013 188.909927 6 2 14FFE060 2
+           lua: R TR 190.670083 178.909999 2 10 14FFE060 2
+           cpp: R TR 190.670013 178.909927 2 10 14FFE060 2
+           lua: R TR 192.670083 176.909999 6 2 14FFE060 2
+           cpp: R TR 192.670013 176.909927 6 2 14FFE060 2
+        >> lua: R TR 182.188583 190.656 6 2 F3FFE060 2
+        >> cpp: R TR 459.391205 122.59996 6 2 00FFA040 2
+           lua: R TR 188.188583 192.656 2 10 F3FFE060 2
+           cpp: R TR 465.391205 124.59996 2 10 00FFA040 2
+           lua: R TR 182.188583 214.656 6 2 F3FFE060 2
+  PASS fuzz.dyadic.21  OK 3001 frames 48104 calls max|d|=0.000659 alpha_d=0
+  PASS fuzz.ms60.22  OK 3001 frames 50199 calls max|d|=0.000279 alpha_d=1
+  PASS fuzz.jitter.22  OK 3001 frames 48692 calls max|d|=0.000101 alpha_d=1
+  PASS fuzz.dyadic.22  OK 3001 frames 50485 calls max|d|=0.000327 alpha_d=0
+  PASS fuzz.ms60.23  OK 3001 frames 47619 calls max|d|=0.000442 alpha_d=1
+  PASS fuzz.jitter.23  OK 3001 frames 46137 calls max|d|=0.00016 alpha_d=1
+  PASS fuzz.dyadic.23  OK 3001 frames 48218 calls max|d|=0.000643 alpha_d=0
+  PASS fuzz.ms60.24  OK 3001 frames 49677 calls max|d|=0.000397 alpha_d=1
+  PASS fuzz.jitter.24  OK 3001 frames 49983 calls max|d|=0.000127 alpha_d=1
+  PASS fuzz.dyadic.24  OK 3001 frames 50277 calls max|d|=0.000327 alpha_d=0
+  PASS fuzz.ms60.25  OK 3001 frames 42377 calls max|d|=0.000546 alpha_d=1
+  PASS fuzz.jitter.25  OK 3001 frames 73759 calls max|d|=0.000196 alpha_d=1
+  PASS fuzz.dyadic.25  OK 3001 frames 50493 calls max|d|=0.000327 alpha_d=0
+  PASS fuzz.ms60.26  OK 3001 frames 50490 calls max|d|=0.000234 alpha_d=1
+  PASS fuzz.jitter.26  OK 3001 frames 45341 calls max|d|=0.000191 alpha_d=1
+  PASS fuzz.dyadic.26  OK 3001 frames 50754 calls max|d|=0.000544 alpha_d=0
+  PASS fuzz.ms60.27  OK 3001 frames 77260 calls max|d|=0.000431 alpha_d=1
+  PASS fuzz.jitter.27  OK 3001 frames 75542 calls max|d|=0.000244 alpha_d=0
+  PASS fuzz.dyadic.27  OK 3001 frames 50428 calls max|d|=0.000544 alpha_d=0
+  PASS fuzz.ms60.28  OK 3001 frames 47709 calls max|d|=0.000442 alpha_d=1
+  PASS fuzz.jitter.28  OK 3001 frames 50054 calls max|d|=0.000222 alpha_d=1
+  PASS fuzz.dyadic.28  OK 3001 frames 54112 calls max|d|=0.000603 alpha_d=0
+  PASS fuzz.ms60.29  OK 3001 frames 50652 calls max|d|=0.000278 alpha_d=1
+  PASS fuzz.jitter.29  OK 3001 frames 72781 calls max|d|=0.00016 alpha_d=1
+  PASS fuzz.dyadic.29  OK 3001 frames 51060 calls max|d|=0.000327 alpha_d=0
+  PASS fuzz.ms60.30  OK 3001 frames 49887 calls max|d|=0.000234 alpha_d=1
+  PASS fuzz.jitter.30  OK 3001 frames 48189 calls max|d|=0.00022 alpha_d=1
+  PASS fuzz.dyadic.30  OK 3001 frames 50239 calls max|d|=0.000327 alpha_d=0
+  PASS fuzz.ms60.31  OK 3001 frames 74921 calls max|d|=0.000442 alpha_d=1
+  PASS fuzz.jitter.31  OK 3001 frames 48752 calls max|d|=0.000139 alpha_d=1
+  PASS fuzz.dyadic.31  OK 3001 frames 50375 calls max|d|=0.000327 alpha_d=0
+  PASS fuzz.ms60.32  OK 3001 frames 49450 calls max|d|=0.000442 alpha_d=1
+  PASS fuzz.jitter.32  OK 3001 frames 44953 calls max|d|=0.000234 alpha_d=0
+  PASS fuzz.dyadic.32  OK 3001 frames 48167 calls max|d|=0.000643 alpha_d=0
+  PASS fuzz.ms60.33  OK 3001 frames 47817 calls max|d|=0.000529 alpha_d=1
+  PASS fuzz.jitter.33  OK 3001 frames 48687 calls max|d|=0.00011 alpha_d=1
+  PASS fuzz.dyadic.33  OK 3001 frames 54085 calls max|d|=0.000594 alpha_d=0
+  PASS fuzz.ms60.34  OK 3001 frames 75679 calls max|d|=0.000431 alpha_d=1
+  PASS fuzz.jitter.34  OK 3001 frames 48150 calls max|d|=8.6e-05 alpha_d=1
+  PASS fuzz.dyadic.34  OK 3001 frames 75708 calls max|d|=0.000643 alpha_d=0
+  PASS fuzz.ms60.35  OK 3001 frames 49221 calls max|d|=0.000442 alpha_d=1
+  PASS fuzz.jitter.35  OK 3001 frames 43369 calls max|d|=0.000196 alpha_d=0
+  PASS fuzz.dyadic.35  OK 3001 frames 49658 calls max|d|=0.000637 alpha_d=0
+  PASS fuzz.ms60.36  OK 3001 frames 49728 calls max|d|=0.000229 alpha_d=1
+  PASS fuzz.jitter.36  OK 3001 frames 44323 calls max|d|=0.000195 alpha_d=1
+  PASS fuzz.dyadic.36  OK 3001 frames 76929 calls max|d|=0.000594 alpha_d=0
+  PASS fuzz.ms60.37  OK 3001 frames 50585 calls max|d|=0.000279 alpha_d=1
+  PASS fuzz.jitter.37  OK 3001 frames 43523 calls max|d|=0.000175 alpha_d=1
+  PASS fuzz.dyadic.37  OK 3001 frames 50867 calls max|d|=0.000327 alpha_d=0
+  PASS fuzz.ms60.38  OK 3001 frames 50285 calls max|d|=0.000278 alpha_d=1
+  PASS fuzz.jitter.38  OK 3001 frames 75183 calls max|d|=0.000257 alpha_d=1
+  PASS fuzz.dyadic.38  OK 3001 frames 50579 calls max|d|=0.000327 alpha_d=0
+  PASS fuzz.ms60.39  OK 3001 frames 49949 calls max|d|=0.000437 alpha_d=1
+  FAIL fuzz.jitter.39
+       DIVERGENCE at frame 108 call #27: rgb
+           lua: S /rd/plasma.png 152 188.003298 27.9 27.9 0 0
+           cpp: S /rd/plasma.png 152 188.003296 27.8999996 27.8999996 0 0
+           lua: S /rd/plasma.png 180 188.003298 18 18 0 0
+           cpp: S /rd/plasma.png 180 188.003296 18 18 0 0
+           lua: S /rd/plasma.png 208 188.003298 18 18 0 0
+           cpp: S /rd/plasma.png 208 188.003296 18 18 0 0
+        >> lua: R TR 461.338182 252.554 6 2 56FFA040 2
+        >> cpp: R TR 187.030136 162.599991 6 2 00FFE060 2
+           lua: R TR 467.338182 254.554 2 10 56FFA040 2
+           cpp: R TR 193.030136 164.599991 2 10 00FFE060 2
+           lua: R TR 461.338182 276.554 6 2 56FFA040 2
+  PASS fuzz.dyadic.39  OK 3001 frames 50536 calls max|d|=0.000327 alpha_d=0
+  PASS fuzz.ms60.40  OK 3001 frames 45555 calls max|d|=0.000442 alpha_d=1
+  PASS fuzz.jitter.40  OK 3001 frames 43472 calls max|d|=0.00018 alpha_d=1
+  PASS fuzz.dyadic.40  OK 3001 frames 45939 calls max|d|=0.000659 alpha_d=0
+RESULT: pass=131 fail=7

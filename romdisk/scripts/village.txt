@@ -1,0 +1,115 @@
+# village.txt - the village's scripts (slice 3D-5: "Talk to Wren"). GDD 7.4 / Appendix A.
+# Compiled at load by src/script.cpp into fixed pools; checked by tools/dialog/lint.py (tests/dialog).
+# The GDD Appendix A lines are kept verbatim; every change is marked "# slice 3D-5" with its reason:
+#   AD4  lines that mention Corwin (not in this slice) are rewritten
+#   AD5  the stage-0 report branch also teaches Fireball (a GDD script bug: that route never did)
+#   AD6  the ending is out of scope: the Warden's defeat sets stage 6 (the GDD's stage 7 line plays from 6)
+#   AD8  data directives: @flags, @marker (and speakers.txt)
+#   D1   one GDD page split in two: the supplied pixel font is wider than the GDD's stand-in (page fit)
+#   S16  emotes and gestures (emote / anim commands; no dialogue line changes)
+#   S17  checkpoint ids (c1, c2, rest) name the checkpoint in the traces; the behaviour is the GDD's
+
+@flags patrol_a patrol_b skill_fire has_token talked_brom brom_refill warden_down      # slice 3D-5 (AD8)
+@marker wren ! stage == 0 || stage == 2                                                  # slice 3D-5 (AD8)
+@marker brom ... !talked_brom || stage >= 3 && !brom_refill                              # slice 3D-5 (AD8)
+
+@script new_game                  # slice 3D-5: run at a new game (stands in for the intro's last command)
+  objective "Speak with Wren"
+  end
+
+@script wren_main
+@if stage == 0 && patrol_a + patrol_b == 2
+  wren(worried): You fought them already? Both patrols? Then you know.
+  give skill fireball                                     # slice 3D-5 (AD5)
+  sys: Rowan learned FIREBALL.                            # slice 3D-5 (AD5)
+  goto report
+@elif stage == 0
+  emote wren !                                            # slice 3D-5 (S16)
+  wren: Oh! A knight. A real one. Thank the stars.
+  wren(worried): The dead are walking again.|Two patrols came over the hill last night,
+  wren(worried): and the old barrow gate is humming.
+:ask
+  choice "I will deal with them." -> accept | "Tell me more." -> lore
+         | cancel "Not now." -> later
+@elif stage == 1
+  wren: Skeletons left: the counter says it all. Fire burns them, and burning keeps going.
+  end
+@elif stage == 2
+:report
+  wren(happy): Both patrols? You're quicker than my kettle.
+  anim wren use_item                                      # slice 3D-5 (S16)
+  wren: Take this token - the old ward on the east road will let you pass. And hold still...   # slice 3D-5 (AD4)
+  give token
+  set max_hp 30
+  heal
+  sys: Wren's blessing! Max HP +10, fully healed.
+  set stage 3
+  objective "Face what waits on the east road"            # slice 3D-5 (AD4)
+  checkpoint c2                                           # slice 3D-5 (S17: id)
+  end
+@elif stage >= 3 && stage < 6                             # slice 3D-5 (AD6: 7 -> 6)
+  wren: Something old walks the east road now. See Brom for potions before you go.   # slice 3D-5 (AD4)
+  end
+@else
+  wren(happy): Hollowmere sleeps easy tonight. Thanks to you.
+  end
+@end
+:lore
+  wren(worried): Long ago a guardian was bound under the barrow.        # slice 3D-5 (D1: the GDD page, split in two)
+  wren(worried): The Bone Warden. He keeps the dead asleep.             # slice 3D-5 (D1)
+  wren(worried): Something cracked his seal.
+  goto ask
+:accept
+  set stage 1
+  give skill fireball
+  anim wren use_item                                      # slice 3D-5 (S16)
+  wren(happy): Then take this. Burn the bones, not the barns.
+  sys: Rowan learned FIREBALL.
+  objective "Defeat the skeleton patrols ({patrols}/2)"   # slice 3D-5: the live counter (GDD: "(0/2)", App. B: "(n/2)")
+  checkpoint c1                                           # slice 3D-5 (S17: id)
+  end
+:later
+  wren: Come back before they reach the houses. Please.
+  end
+
+@script brom_main                                         # GDD Appendix A
+@if !talked_brom
+  anim brom use_item                                      # slice 3D-5 (S16)
+  brom: Ho! A knight, and a rusty one. Here - three potions. Mind the cork, it bites.
+  emote rowan sweat                                       # slice 3D-5 (S16)
+  rowan: ...Thank you.
+  brom: Don't thank me. Come back alive and buy a new helmet.
+  give potions 3
+  flag talked_brom
+  end
+@else
+  brom: Need a rest? My fire's warm and my stew is only slightly alarming.
+  choice "Rest (full heal)" -> rest | cancel "Later." -> bye
+:rest
+  fade out 20
+  heal
+  @if stage >= 3 && !brom_refill
+     give potions 3
+     flag brom_refill
+     sys: Potions refilled.
+  @end
+  checkpoint rest                                         # slice 3D-5 (S17: id)
+  fade in 20
+  brom: Good as new. Well. Good as used.
+  end
+:bye
+  brom: The fire's lit whenever you need it.               # slice 3D-5 (GDD 7.3: the "no" branch says how to come back)
+  end
+@end
+
+@script after_battle                                      # slice 3D-5: run after every won battle
+@if stage == 1 && patrol_a + patrol_b == 2
+  set stage 2
+  objective "Report to Wren"
+  sys: Both patrols are down. Report to Wren.
+@elif warden_down && stage < 6
+  set stage 6
+  objective ""
+  sys: The Bone Warden is at rest. The barrow is quiet.
+@end
+  end

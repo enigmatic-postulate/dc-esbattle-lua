@@ -38,14 +38,23 @@ Material flags:
 
 v1 files still load: they have one implicit material.
 
+## PRELIT (the VS1 art)
+
+Header flag `PRELIT` (4, static models only; the loader rejects it on a skinned model): each vertex's `argb` is its
+final lit colour, baked offline, and its normal is zero. `r3d::prelight()` then copies the colours instead of
+lighting the normals (one colour set per model, whatever the yaw). The VS1 village props use it: VS1 baked
+`0.50 + 0.62 * max(N.L, 0)` into them with a light a few degrees from ours (`tools/vs1art/import_props.py`,
+[SLICE_VS1_ART.md](SLICE_VS1_ART.md)). Their `<name>_r<yaw>.dmf` variants are stored un-rotated, so the field draws
+them like any other prop (`mat_trs_y(yaw)`).
+
 **Conventions used by the field (not part of the file format):**
-* `<name>_r<yaw>.dmf` (e.g. `house_stone_r180.dmf`) is `<name>.dmf` with only the faces the game camera can see when the prop is placed at that yaw (`tools/dmf/build_village.py`, view culling). The field uses it for a `prop` at exactly that yaw, else `<name>.dmf`, which is culled for every yaw. Both look the same from the game camera. There are no distance LODs.
+* `<name>_r<yaw>.dmf` (e.g. `house_stone_r180.dmf`) is the model for a `prop` placed at exactly that yaw, with only the faces the game camera can see there (view culling). The field uses it if present, else `<name>.dmf`. Since the VS1 art ([SLICE_VS1_ART.md](SLICE_VS1_ART.md)) every village prop is such a variant (VS1's camera-cone culling and baked light); the all-yaw house models were retired. There are no distance LODs.
 * Static models get **per-strip bounding spheres** at load (`r3d::gfx_init`), so off-screen strips of a half-visible prop are neither transformed nor submitted.
 
 ## Layout (little-endian)
 
 ```
-Header (96 B)   "DMF1", version 1|2, flags (SKINNED | TEXTURED), file_size, counts,
+Header (96 B)   "DMF1", version 1|2, flags (SKINNED | TEXTURED | PRELIT), file_size, counts,
                 bind-pose bounds, section offsets (v2: + num_materials, off_materials)
 Materials (v2)  64 B each: char tex[48] ("" | "@" | "/rd/tex/x.png"), u16 flags
 Vertices        32 B each: f32 x,y,z  f32 u,v  s8 nx,ny,nz  u8 w0  u32 argb  pad[4]

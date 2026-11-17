@@ -57,6 +57,42 @@ Material material_create(Sprite texture, int flags);
 // (the .dmf codes). Returns a Sprite handle (it uses one of the MAX_SPRITES slots).
 Sprite texture_create(const uint16_t* texels, int w, int h, int fmt);
 
+// Replaces the texels of a memory texture (same size and format as at texture_create), e.g. the two
+// portrait slots (slice 3D-5). KOS: uploaded into the same VRAM block at once, so the
+// caller must not have drawn `s` in the last 2 frames (the PVR renders frame N-1 while tick N runs:
+// src/portrait.cpp waits that long). Returns false if `s` is not a memory texture.
+// twiddled = true: the texels are already in the PVR's twiddled order (KOS TWIDOUT(x, y): y's bits at the
+// even positions, x's at the odd ones; square textures) and are copied as they are - no per-texel work on
+// the SH4 (src/portrait.cpp twiddles its cache at load time).
+bool texture_update(Sprite s, const uint16_t* texels, bool twiddled = false);
+// The index of texel (x, y) of a square pow2 texture in twiddled order (the KOS TWIDOUT macro).
+inline uint32_t twiddle_index(uint32_t x, uint32_t y) {
+    uint32_t r = 0;
+    for (int b = 0; b < 10; ++b) r |= ((y >> b) & 1u) << (2 * b) | ((x >> b) & 1u) << (2 * b + 1);
+    return r;
+}
+
+// VQ texture (the PVR's compressed format, 2 bits per texel): `data` is exactly what the PVR reads - a 2 KiB
+// codebook of 256 entries x 4 RGB565 texels (a 2x2 block in twiddled order: (0,0) (0,1) (1,0) (1,1)), then the
+// (w/2) x (h/2) index bytes in twiddled order. Square pow2 sizes 16..1024; bytes = 2048 + w*h/4. Uploaded as
+// it is (no per-texel work); the village ground (tools/ground/paint_ground.py, romdisk/maps/<map>.gnd).
+// texture_update() does not apply to it. GROUND_NO_VQ builds (KOS) decode it and upload plain RGB565 instead.
+const int VQ_CODEBOOK_BYTES = 2048;
+Sprite texture_create_vq(const void* data, int bytes, int w, int h);
+// The same decoded to linear RGB565 texels (w*h): the host harness, and the GROUND_NO_VQ fallback.
+inline void vq_decode(const uint8_t* data, int w, int h, uint16_t* out) {
+    const uint16_t* cb = (const uint16_t*)data;
+    const uint8_t* idx = data + VQ_CODEBOOK_BYTES;
+    for (int by = 0; by < h / 2; ++by)
+        for (int bx = 0; bx < w / 2; ++bx) {
+            const uint16_t* e = cb + 4 * idx[twiddle_index((uint32_t)bx, (uint32_t)by)];
+            out[(2 * by) * w + 2 * bx] = e[0];         // (0,0)
+            out[(2 * by + 1) * w + 2 * bx] = e[1];     // (0,1)
+            out[(2 * by) * w + 2 * bx + 1] = e[2];     // (1,0)
+            out[(2 * by + 1) * w + 2 * bx + 1] = e[3]; // (1,1)
+        }
+}
+
 // Per-frame vertex arena. vtx_begin() reserves up to `max` vertices (nullptr if the frame's
 // arena is full: the caller skips the draw); vtx_end() commits the first `used` of them as one
 // batch drawn with `m`. One batch may be open at a time. The arena resets every frame.

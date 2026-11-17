@@ -8,6 +8,7 @@
 #include "presentation.h"
 #include "skills.h"
 #include "targeting.h"
+#include "text.h"
 
 namespace bt {
 
@@ -69,8 +70,10 @@ bool ui_update(BattleCtx& ctx, Actor& user, PendingAction& out) {
                 ui.target_i = 0;
                 ui.target_entry_lock = TARGET_ENTRY_LOCK;
             } else if (ui.home_i == 1) {
-                ui.state = UiState::TargetAll;            // confirm step: every enemy is marked
-                ui.target_entry_lock = TARGET_ENTRY_LOCK;
+                if (!fire_locked(ctx)) {                  // slice 3D-5: greyed with a lock until Wren teaches it
+                    ui.state = UiState::TargetAll;        // confirm step: every enemy is marked
+                    ui.target_entry_lock = TARGET_ENTRY_LOCK;
+                }
             } else if (ui.home_i == 2) {
                 out = PendingAction();
                 out.skill = &skill(SK_GUARD);
@@ -170,12 +173,20 @@ void ui_draw(BattleCtx& ctx) {
     ActorList enemies = alive_enemies(ctx, *act);
 
     if (ui.state == UiState::Home) {
+        const bool locked = fire_locked(ctx);
         for (int i = 0; i < 3; ++i) {
             real size = (i == ui.home_i) ? ICON_3X : ICON_2X;   // selected command is enlarged
-            icon_draw(RING_ICON[i], base_x + (i - (real)1.0) * RING_SPACING, base_y, size);
+            const real ix = base_x + (i - (real)1.0) * RING_SPACING;
+            if (i == 1 && locked) {                              // slice 3D-5: not learned yet - greyed, a lock on it
+                icon_draw_tint(RING_ICON[i], ix, base_y, size, 0x90606060u);
+                text_icon_draw(TI_LOCK, (float)(ix + size * (real)0.25), (float)(base_y + size * (real)0.25), 1.0f, 0xFFFFFFFFu, 0.0f);
+            } else {
+                icon_draw(RING_ICON[i], ix, base_y, size);
+            }
         }
-        font_draw_centered(base_x, base_y - 48, ui.home_i < 3 ? RING_NAME[ui.home_i] : "POTION", 2, 0xFFFFCD75);
-        if (ui.home_i == 1)   // preview: small markers over every enemy Fire would hit
+        font_draw_centered(base_x, base_y - 48, ui.home_i < 3 ? RING_NAME[ui.home_i] : "POTION", 2,
+                           (ui.home_i == 1 && locked) ? 0xFF909090 : 0xFFFFCD75);
+        if (ui.home_i == 1 && !locked)   // preview: small markers over every enemy Fire would hit
             for (Actor* e : enemies) draw_marker(ctx, *e, 0, ICON_TARGET, ICON_1X);
         static const Prompt P[] = { { ICON_PAD_A, ICON_COUNT, "SELECT" },
                                     { ICON_PAD_LEFT, ICON_PAD_RIGHT, "CHOOSE" },

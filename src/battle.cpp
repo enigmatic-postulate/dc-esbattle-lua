@@ -26,6 +26,7 @@ static Rules g_rules;
 static BattleView g_view = BattleView::Models3D;
 
 Rules& rules() { return g_rules; }
+bool fire_locked(const BattleCtx& ctx) { return g_rules.learned_skills && !(ctx.skills & SKILL_FIRE); }
 void battle_set_view(BattleView v) { g_view = v; }
 BattleView battle_view() { return g_view; }
 static const int T_ANIMATE_MIN = 12;   // 0.20 s
@@ -65,6 +66,7 @@ void battle_begin(const EncounterDef& enc, const PartyState& party) {
     ctx.fx.floats.clear();
     spawn_encounter(ctx, enc, party);
     ctx.potions = party.potions;
+    ctx.skills = party.skills;
     boss_begin(ctx);
     rebuild_order(ctx);
     ui_reset(ctx);

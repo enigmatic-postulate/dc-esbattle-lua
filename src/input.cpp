@@ -24,5 +24,6 @@ void input_reset() { g_prev = g_cur; }
 bool input_held(eng::Key k)     { return (g_cur >> k) & 1u; }
 bool input_pressed(eng::Key k)  { return ((g_cur & ~g_prev) >> k) & 1u; }
 bool input_released(eng::Key k) { return ((~g_cur & g_prev) >> k) & 1u; }
+void input_consume(eng::Key k) { g_prev |= g_cur & (1u << k); }   // no edge left for k this tick
 
 } // namespace bt

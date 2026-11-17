@@ -6,7 +6,8 @@ TARGET = battle.elf
 SRC_OBJS = src/ai.o src/anim.o src/arena.o src/assets.o src/battle.o src/battle3d.o src/battle3d_draw.o src/chars.o src/combat.o src/dmf.o src/encounters.o src/field.o \
            src/field3d.o src/font.o src/fx.o src/game.o src/hpbar.o src/icons.o src/input.o \
            src/input_probe.o src/models.o src/presentation.o src/render3d.o src/skills.o src/status.o \
-           src/targeting.o src/turn_system.o src/ui.o
+           src/targeting.o src/turn_system.o src/ui.o \
+           src/dialog_ui.o src/portrait.o src/progress.o src/script.o src/text.o
 OBJS = platform/kos/main.o $(SRC_OBJS) romdisk.o
 
 # romdisk/: PNGs, maps/ and models/*.dmf (rebuild models with tools/dmf/build_models.sh)
@@ -56,6 +57,24 @@ KOS_CFLAGS   += -MMD -MP
 # A/B triage: make PVR_DEFAULTS=1 uses pvr_init_defaults() (512 KiB TA vertex buffers)
 ifdef PVR_DEFAULTS
 KOS_CFLAGS += -DPVR_DEFAULTS=1
+endif
+
+# Portraits (slice 3D-5): twiddled once at load, uploaded with a plain copy. make PORTRAIT_KOS_TWIDDLE=1 lets
+# KOS twiddle every upload instead (the path every other texture takes; slower) - the fallback if portraits
+# ever show scrambled on hardware (TRIAGE.md)
+ifdef PORTRAIT_KOS_TWIDDLE
+KOS_CFLAGS += -DPORTRAIT_KOS_TWIDDLE=1
+endif
+
+# The village ground (docs/GROUND_ART.md) is a VQ texture. make GROUND_NO_VQ=1 decodes it at boot and uploads
+# plain RGB565 (512 KiB of VRAM instead of 66) - the fallback if the ground ever shows scrambled blocks (TRIAGE.md)
+ifdef GROUND_NO_VQ
+KOS_CFLAGS += -DGROUND_NO_VQ=1
+endif
+
+# Debug pad overlay (top left, over the objective HUD): on in DIAG builds, or make INPUT_OVERLAY=1
+ifdef INPUT_OVERLAY
+KOS_CFLAGS += -DINPUT_OVERLAY=1
 endif
 
 # 3D triage: make R3D_SAFE=1 submits 3D strips one vertex per pvr_prim() (see platform/kos/main.cpp)
@@ -142,8 +161,8 @@ $(HOST_SHZ_LIB):
 .PHONY: host
 host: $(HOST_SHZ_LIB)
 	mkdir -p build
-	$(HOST_CXX) -O2 -Wall -Wextra $(HOST_SHZ_FLAGS) -DBATTLE_REAL_DOUBLE src/*.cpp platform/host/host_engine.cpp platform/host/trace_main.cpp platform/host/battle_bot.cpp $(HOST_SHZ_LIB) -o build/battle_trace_f64
-	$(HOST_CXX) -O2 -Wall -Wextra $(HOST_SHZ_FLAGS) src/*.cpp platform/host/host_engine.cpp platform/host/trace_main.cpp platform/host/battle_bot.cpp $(HOST_SHZ_LIB) -o build/battle_trace_f32
+	$(HOST_CXX) -O2 -Wall -Wextra $(HOST_SHZ_FLAGS) -DBATTLE_REAL_DOUBLE src/*.cpp platform/host/host_engine.cpp platform/host/trace_main.cpp platform/host/battle_bot.cpp platform/host/story.cpp $(HOST_SHZ_LIB) -o build/battle_trace_f64
+	$(HOST_CXX) -O2 -Wall -Wextra $(HOST_SHZ_FLAGS) src/*.cpp platform/host/host_engine.cpp platform/host/trace_main.cpp platform/host/battle_bot.cpp platform/host/story.cpp $(HOST_SHZ_LIB) -o build/battle_trace_f32
 	$(HOST_CXX) -O2 $(HOST_SHZ_FLAGS) src/*.cpp platform/bench/bench_main.cpp $(HOST_SHZ_LIB) -o build/bench_f32
 
 # Prints the host compile flags for SH4ZAM (used by tests/run_tests.sh).

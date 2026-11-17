@@ -89,7 +89,7 @@ plugin)
     done
     ;;
 bench) build_game "$2" "$3" "$HERE/bench_sh4.cpp" ;;
-trace) build_game "$2" "$3" "$2/platform/host/host_engine.cpp" "$2/platform/host/trace_main.cpp" ;;
+trace) build_game "$2" "$3" "$2/platform/host/host_engine.cpp" "$2/platform/host/trace_main.cpp" "$2/platform/host/battle_bot.cpp" "$2/platform/host/story.cpp" ;;
 run)   shift; exec "$QEMU_SH4" "$@" ;;
 count|cache)
     elf="$2"; in="$3"; out="$4"; rd="${5:-$ROOT/romdisk}"

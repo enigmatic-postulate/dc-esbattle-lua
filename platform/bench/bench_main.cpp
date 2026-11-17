@@ -19,6 +19,8 @@ void gfx_rect_tr(float, float, float, float, uint32_t, float) { g_calls = g_call
 bool input_down(Key k) { return (g_btn >> k) & 1; }
 int  input_axis(Axis) { return 0; }
 Sprite texture_create(const uint16_t*, int, int, int) { static int n = 100; return ++n; }
+Sprite texture_create_vq(const void*, int, int, int) { static int n = 200; return ++n; }
+bool texture_update(Sprite, const uint16_t*, bool) { return true; }   // slice 3D-5 (portraits): a 32 KiB copy on KOS, not modelled
 Material material_create(Sprite, int) { static int n = 0; return ++n; }
 alignas(32) static Vert3 g_vtx[16384];
 Vert3* vtx_begin(int max) { return max <= 16384 ? g_vtx : nullptr; }

@@ -18,7 +18,8 @@ map 30 20                 <- width height (max 64 x 64), followed by exactly <he
 spawn 3 10 right          <- hero start tile + facing (down|up|left|right)
 entity slime_a enemy slime 12 4 down slimes_2
 entity slime_b enemy slime 20 12 left test_slimes patrol 1 0 3
-entity guard npc guard 10 16 down guard_duel
+entity guard enemy guard 10 16 down guard_duel
+entity wren npc mage 6 17 up talk wren_main      <- slice 3D-5: NPCs talk (a script), enemies fight
 ```
 
 | Char | Tile | Walkable |
@@ -30,20 +31,31 @@ entity guard npc guard 10 16 down guard_duel
 | `T` | tree | no |
 | `~` | water (animated) | no |
 
-* The loader rejects bad files with a line number: unknown tile char, wrong row width, spawn or entity on a blocking tile, unknown encounter. The message goes to the serial log, and the game shows **MAP LOAD ERROR**.
-* The field is drawn in 3D (`src/field3d.cpp`, see §8): each tile is a 1×1 unit quad of the ground plane, textured with its cell of `romdisk/tex/ground.png`. The logic still works in 32 px tiles (1/16 px positions). Maps can also place 3D props (§8).
+* The loader rejects bad files with a line number: unknown tile char, wrong row width, spawn or entity on a blocking tile, unknown encounter, an `npc` without `talk`. The message goes to the serial log, and the game shows **MAP LOAD ERROR**.
+* The field is drawn in 3D (`src/field3d.cpp`, see §8): the ground plane is one texture over the whole map - painted offline for the village (`romdisk/maps/village.gnd`, `tools/ground/paint_ground.py`, docs/GROUND_ART.md: re-run it after editing the map), else generated from the tiles when the map loads (VS1's ground, 4-8 texels per tile). The logic still works in 32 px tiles (1/16 px positions). Maps can also place 3D props (§8). Outside the map the hero is blocked, so a map needs no `#` border (the village has none).
 * Movement is free and analog (stick, or the d-pad as a full-tilt stick): up to 24 sub-px/tick (1.5 px/tick = 2.81 tiles/s), the same in every direction. The hero collides with a 16×12 "feet" box (`HERO_BOX_*` in `src/field.h`), so 1-tile corridors are easy to walk, and he slides along walls. Entities block with a 24×20 body box; touching one starts its encounter.
 * After editing the test map, re-check the collision sweep `field_walk` (its route is written for this map).
 
 ## 2. Add an enemy or NPC to a map
 
-`entity <id> <enemy|npc> <hero|guard|slime> <x> <y> <facing> <encounter> [patrol <dx> <dy> <len>]`
+```
+entity <id> npc   <look> <x> <y> <facing> talk <script> [patrol <dx> <dy> <len>] [if <cond...>]
+entity <id> enemy <look> <x> <y> <facing> <encounter> [patrol <dx> <dy> <len>] [after <id> [<id>]] [win <flag>] [if <cond...>]
+```
 
-* `id`: unique per map, at most 15 characters. It appears in test traces.
-* `encounter`: must exist in `src/encounters.cpp` (see §3). Touching the entity starts that battle. This applies to **NPCs too**, per the slice brief.
-* `patrol 1 0 3`: walks back and forth 3 tiles along +x, waiting 45 ticks between steps. If it walks into the hero, the battle starts as well. Exactly one of dx/dy must be non-zero.
-* Limit: 16 entities per map (`MAX_ENTITIES` in `src/field.h`).
-* A won battle removes the entity for the session. Game Over restores every entity.
+* `id`: unique per map, at most 15 characters. It appears in test traces and is the actor name scripts use.
+* `look` (slice 3D-5): `slime` (Skeleton Warrior), `guard` (Skeleton Mage), `mage` (Wren), `smith` (Brom). New looks:
+  `LOOKS[]` in `src/field3d.cpp` + `EntityLook` in `src/field.h` + `look_by_name()`.
+* **enemy**: `encounter` must exist in `src/encounters.cpp` (see §3). Touching it starts that battle. `win <flag>`
+  sets a quest flag when its battle is won; `after a [b]` keeps it dormant until those are beaten.
+* **npc** (slice 3D-5): `talk <script>` names the script A runs (§12). Touching an NPC never starts a battle: it
+  blocks like a wall. It stops its patrol and faces the hero while he is within 3 tiles.
+* `if <cond...>`: the rest of the line is a condition (§12 syntax); false = hidden, untouchable, frozen. Re-evaluated
+  whenever the quest state changes (the Warden: `if has_token`).
+* `patrol 1 0 3`: walks back and forth 3 tiles along +x, waiting 45 ticks between steps. Exactly one of dx/dy is
+  non-zero (+-1). An enemy that walks into the hero starts its battle; an NPC waits.
+* Limit: 16 entities per map (`MAX_ENTITIES` in `src/field.h`). A won battle removes the entity; a lost one restores
+  the last checkpoint (entities beaten before it stay beaten).
 
 ## 3. Add an encounter
 
@@ -91,6 +103,8 @@ All placeholder art is defined as text pixel grids in `tools/make_assets.py`, 16
 | Command | What it checks |
 |---|---|
 | `tests/run_tests.sh` | builds the host binaries, then 12 battle regressions (against the golden state traces) + 2 battle-UI flow checks (B back, Fire confirm) + 11 field scenarios (goldens + invariants F3/F4/F8/F9 + expected win/restart counts) + float==double determinism + asset reproducibility. 61 checks, about 25 s |
+| `tests/dialog/run.sh` | slice 3D-5: lint and its fixtures, compiler/metrics parity, the talk prompt, the dialog UI rules, the story routes (order variations), checkpoints, the Fire lock, budgets (resources, vertices, heap, SH4 estimate), sanitizers, assets. ~8 min; `QUICK=1`, `BPY=`, `SH4=1` |
+| `tests/battle3d/run.sh` | slice 3D-4: the 3D battle, the rules equivalence, boss balance |
 | `tests/run_tests.sh --update` | re-records `tests/golden/*.trace.gz` after an **intentional** change; review the diff first |
 | `python3 tests/check_invariants.py <trace>` | field rules on any trace (e.g. long fuzz runs) |
 | `python3 harness/gen_inputs.py field_fuzz ms60 <seed> 6000 x.in` | new random field session |
@@ -107,7 +121,8 @@ The 3D slice adds `tests/slice3d/run.sh` (see `docs/SLICE_3D_1.md` §6): runtime
 
 ## 8. The 3D village (field)
 
-The boot map is `romdisk/maps/village.txt`. `test_field.txt` still loads with `--map` on the host.
+The boot map is `romdisk/maps/village.txt`: since the VS1 art reconciliation (§13, `docs/SLICE_VS1_ART.md`) VS1's
+40x30 layout, the one the GDD describes. `test_field.txt` still loads with `--map` on the host.
 
 Besides the tile rows, `spawn` and `entity` lines, a map can place 3D props:
 
@@ -120,7 +135,7 @@ prop bush          5.4   9.2    0               # decoration: does not block
 ```
 
 **Placement:**
-* `model` = `romdisk/models/<model>.dmf` (name up to 15 characters). If `<model>_r<yaw>.dmf` exists for the prop's yaw, it is used instead: the same model with the faces the camera can never see at that yaw removed. `tools/dmf/build_models.sh` makes them for every house yaw in `village.txt`. A house at a new yaw works without a rebuild; it is just more expensive until you rebuild.
+* `model` = `romdisk/models/<model>.dmf` (name up to 15 characters). If `<model>_r<yaw>.dmf` exists for the prop's yaw, it is used instead: the model with the faces the camera can never see at that yaw removed. The village props are all such VS1 variants (`house_plaster_r0/_r180`, `house_stone_r0/_r180`, `arch_r90`, `border_r0`, `boulder02_r0/_r90`, `boulder03_r0/_r90`, `crate_r0`, `fence_r0`, `wagon_r0`), with their lighting baked: placing one at a yaw VS1 did not build needs a new variant (§13).
 * Numbers are `[-]digits[.digits]`, e.g. `12`, `-0.5`, `21.25`. No exponents. Footprint sizes are whole numbers.
 * `(x, y)` is the model origin, in tiles. Fractional positions are fine.
 * A solid footprint is centred on `(x, y)` and must be tile-aligned. The loader checks this, and checks that the footprint stays inside the map.
@@ -135,17 +150,16 @@ prop bush          5.4   9.2    0               # decoration: does not block
 * Patrols move at 1 tile/s (`NPC_STEP_TICKS` = 60).
 
 **What the view does:**
-* Houses and trees that cover the hero on screen fade to `fade_alpha`: front faces only, TR list.
-* Static props have their lighting baked once per instance.
+* Houses, boulders, the wagon, the arch and trees that cover the hero on screen fade to `fade_alpha` (fainter the closer they are to the eye: `near_fade_*`, VS1's rule): front faces only, TR list.
+* Static props have their lighting baked once per instance; the VS1 props (`PRELIT`, docs/DMF.md) come baked.
+* The camera is VS1's: 9 up, 9 back, 32-degree lens, aimed 1.5 tiles north of the hero, leading his motion, clamped to the map (`cam_*` tunes).
 * Enemies and the hero use lighting baked per yaw (`hero_dyn_light 1` lights the hero per vertex instead).
 * The village's frame cost depends on the geometry: see `docs/SLICE_3D_2.md` §4 before adding many props in one view.
 
-**Adding a prop:**
-1. Add an entry to `PREFABS` in `tools/dmf/build_village.py`. Each entry lists the kit parts with position, rotation and scale. Buildings use `view=True, per_yaw=True, simplify=True` and `decimate` for the parts that may be collapse-decimated (roof tiles, chimney rocks); small props use a triangle `budget`. See the docstring of `build_village.py`.
-2. Rebuild with `tools/dmf/build_models.sh`.
-3. Place it with `prop` lines.
-
-Check the result with `preview_dmf.py --texdir romdisk` and a host frame dump.
+**Adding a prop:** see §13 (a VS1 prop) - or any static `.dmf` in `romdisk/models/` (e.g. `tools/battle3d/make_props.py`
+builds procedural ones), placed with a `prop` line. Check the result with a host frame dump (below) and the frame cost
+over the whole map: `battle_trace_f32 - /dev/null --sweep > s.txt && python3 tools/vs1art/sweep_map.py s.txt romdisk/maps/village.txt map.png`
+(the budget: <= 18,000 written vertices on every tile, `tests/vs1art/run.sh`).
 
 ## 9. 3D models and the 3D field
 
@@ -280,3 +294,109 @@ in `docs/SLICE_3D_BATTLE.md` §3), `python3 tools/battle3d/boss_tune.py` to sear
 **Tests.** `tests/battle3d/run.sh` (`QUICK=1`, `BPY=`, `SH4=1`). If the rules change on purpose for
 the legacy encounters, the baselines no longer apply: they came from the pre-3D build
 (`tests/battle3d/record_baseline.sh`), and the equivalence test runs with `--rules legacy`.
+
+## 12. Dialog, scripts and the quest (slice 3D-5)
+
+Full reference: `docs/SLICE_DIALOG.md` and the plan `docs/NEXT_SLICE_DIALOG.md` §7. After any change run
+`python3 tools/dialog/lint.py` (seconds) and `tests/dialog/run.sh`.
+
+### 12.1 Add an NPC who talks
+
+1. A model: convert a KayKit character like Wren (`tools/dialog/build_assets.sh`:
+   `convert_model.py --fbx .../X.fbx --texture .../x_texture.png --tris 1000 --out assets/vs1_art/bodies/x.dmf`), check it
+   with `tools/battle3d/qc_model.py` against a `--tris 100000 --dissolve 0` conversion, then give it VS1's head (§13:
+   `tools/vs1art/import_chars.py <vs1 model> romdisk/models/x.dmf --body assets/vs1_art/bodies/x.dmf`). Keep each NPC
+   near 2,000 vertices and check the frame cost with `--sweep` (`docs/SLICE_VS1_ART.md` §6). Mind `MAX_CHAR_VERTS`
+   and `LIT_POOL_VERTS` in `src/field3d.cpp`.
+2. A look: add it to `LOOKS[]` (`src/field3d.cpp`, `library = true`: it animates with the shared library's `idle_a`,
+   `walk`, `interact`, `use_item`), `EntityLook` / `look_by_name()` (`src/field.*`). Mind `LIT_POOL_VERTS` (16 yaw
+   buckets of baked lighting per look) and the 32 texture slots.
+3. The map: `entity smith2 npc <look> 20 15 down talk smith2_main`.
+4. A speaker: `@speaker smith2 "Name" RRGGBB smith2` in `romdisk/scripts/speakers.txt` (max 8 speakers; the portrait
+   cache holds `PORTRAIT_CACHE` = 9 files: raise it for a 4th speaker, 32 KiB of RAM each) and its portraits (§12.4).
+5. A script `@script smith2_main` in `romdisk/scripts/<map>.txt`, and optionally a marker:
+   `@marker smith2 ... !talked_smith2`.
+
+### 12.2 Write a script
+
+```
+@flags patrol_a patrol_b skill_fire has_token talked_brom ...     # every flag, once (max 32)
+@marker wren ! stage == 0 || stage == 2                          # ! gold (the quest needs you), ... grey (optional)
+
+@script brom_main
+@if !talked_brom
+  anim brom use_item                        # a gesture (library clip), does not block
+  brom: Ho! A knight, and a rusty one.      # a page: speaker[(neutral|happy|worried)]: text, '|' = line break
+  emote rowan sweat                         # ! ? ... sweat anger, 60 ticks over the head
+  rowan: ...Thank you.
+  give potions 3                            # capped at 3
+  flag talked_brom
+  end
+@else
+  brom: Need a rest?
+  choice "Rest (full heal)" -> rest | cancel "Later." -> bye      # 1-3 options; cancel (B) is the last one
+:rest
+  fade out 20                               # blocks, box hidden
+  heal
+  checkpoint rest
+  fade in 20
+  brom: Good as new.
+  end
+:bye
+  brom: The fire's lit whenever you need it.   # a "no" branch must say how to come back (GDD 7.3; the lint checks)
+  end
+@end
+```
+
+* Pages are wrapped at compile time to 3 lines of 420 px with the real font; a page that does not fit is an error
+  (split it into two pages). `sys: text` is a gold, centred system page. `{gold}...{/}`, `{red}`, `{grey}` colour text.
+* Conditions: `stage`, `potions`, `max_hp`, flag names, integers 0-255, `+ - == != < <= > >= ! && ||` and parentheses
+  (C precedence).
+* Commands: `set stage N` (forward only) / `set max_hp N`, `flag` / `unflag`, `give|take potions N`,
+  `give skill fireball`, `give token`, `heal`, `checkpoint [c1|c2|rest]`, `objective "text"` (`{patrols}` counts the
+  patrols; `""` clears it), `face actor dir|actor`, `anim actor clip`, `emote actor kind`, `wait n`, `fade out|in n`,
+  `letterbox on|off`, `goto label`, `call script`, `end`. Labels are global. `cam`, `move`, `battle`, `map` ... are
+  "not in this slice" errors.
+* Special scripts: `new_game` (runs at a new game, no pages), `after_battle` (after every won battle).
+* Errors: the game shows SCRIPT ERROR and the serial log says `script: village.txt line N: ...`; the lint says the
+  same and more (unreachable pages, unset flags, dead ends, backwards stage sets).
+
+### 12.3 Add a quest stage
+
+1. Pick the stage number (they only move forward; `Progress.stage` is a byte) and any new flags (`@flags`).
+2. Set it where it happens: `set stage 4` in a script (a talk, or `after_battle` for a battle's outcome; an enemy's
+   `win <flag>` sets its flag first).
+3. Give the stage its objective (`objective "..."`), its markers (`@marker` rules that mention it), a checkpoint if
+   the GDD wants one, and the NPCs' lines for it (a `@elif stage == 4` branch in each talk script).
+4. Gate what appears with it: `if stage >= 4` on a map entity.
+5. A route in `tests/dialog/routes/` that reaches it, with `expect stage=4 ...` (order variations: GDD 17), and add it
+   to `ROUTES` in `tests/dialog/run.sh`.
+
+### 12.4 Add or change a portrait
+
+`romdisk/portraits/<base>_<neutral|happy|worried>.dtx`: 32-byte header (`DTX1`, u16 width 128, height 128, format 1 =
+RGB565, flags 0, 20 zero bytes) + 128x128 linear RGB565 texels. Rendered from the models by
+`tools/dialog/make_portraits.py` (add the character to `CHARS`: its high-detail conversion, gradient, glow, framing;
+`tools/dialog/build_assets.sh` makes the conversion). A hand-painted portrait can replace a file as long as it keeps
+the format (GDD 8). The lint checks that every speaker has all three.
+
+## 13. The VS1 art (village props, textures, character heads)
+
+`docs/SLICE_VS1_ART.md` explains the choices; `assets/vs1_art/README.md` and `tools/vs1art/README.md` list the files.
+
+* **Rebuild** after editing anything in `assets/vs1_art/`: `python3 tools/vs1art/import_props.py` (props + textures),
+  `tools/vs1art/build_chars.sh` (characters); `tests/vs1art/run.sh` checks both byte for byte.
+* **A new VS1 prop or yaw variant:** build it with VS1's own pipeline (VS1's `tools/dmf/props.py`, in its repository:
+  it needs the Medieval Village kit and assimp), copy the `<name>_r<yaw>.dmf` into `assets/vs1_art/models/village/`,
+  add the name to `PROPS` in `import_props.py` (and a texture to `TEX_NAMES` if it brings one), rebuild, place it
+  with `prop <name> <x> <y> <yaw>`, and add its footprint to `check_layout.py` if it is VS1's.
+* **A character with VS1's head:** `python3 tools/vs1art/import_chars.py <vs1 model> romdisk/models/<ours>.dmf
+  --body assets/vs1_art/bodies/<ours>.dmf` (the VS1 model: uploaded, or built with `tools/vs1art/vs1_fbx2dmf.py` and
+  VS1's recipe, see `build_chars.sh`). The head is every triangle rigid on the `head` bone; KayKit heads are separate
+  meshes, so the two halves never share a triangle. Add it to `CAST` in `tests/vs1art/check_chars.py`.
+* **Back to our own model** (e.g. if hardware shows a frame over budget): `cp assets/vs1_art/bodies/<name>.dmf
+  romdisk/models/` restores the pre-VS1 character exactly (its 64x64 texture included).
+* **The ground's look:** the village's ground is painted offline (`docs/GROUND_ART.md`): after changing the map's tiles
+  or props run `python3 tools/ground/paint_ground.py` (it writes `romdisk/maps/<map>.gnd`; palette and layers are at the
+  top of the script). A map without a `.gnd` gets the generated VS1 ground (`build_ground_texture()` in
+  `src/field3d.cpp`; `tests/vs1art/check_ground.py` holds its reference - change both).

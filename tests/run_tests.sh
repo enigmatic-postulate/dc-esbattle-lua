@@ -22,6 +22,10 @@ run_case() {   # name kind(battle|field) expect_wins expect_restarts
   # battle goldens: recorded from the sprite battle with the original rules (slice 3D-4 keeps both as
   # --view2d / --rules legacy; the 3D battle is checked turn by turn by tests/battle3d/run.sh)
   local args=(--state-only); [ "$kind" = battle ] && args+=(--battle-test test_slimes --view2d --rules legacy)
+  # field goldens (slice 3D-5 triage): the test map they were written for, with the sprite battle and the original
+  # rules; field_win / field_lose / field_full were regenerated with the story driver (tests/inputs/routes/), as the
+  # analog hero no longer follows the old tile-stepping key scripts
+  [ "$kind" = field ] && args+=(--map /rd/maps/test_field.txt --view2d --rules legacy)
   ./build/battle_trace_f64 "$in" "$WORK/$name.64" "${args[@]}" || { bad "$name (run f64)"; return; }
   ./build/battle_trace_f32 "$in" "$WORK/$name.32" "${args[@]}" || { bad "$name (run f32)"; return; }
   if [ $UPDATE = 1 ]; then gzip -9 -n -c "$WORK/$name.64" > "$gold"; fi

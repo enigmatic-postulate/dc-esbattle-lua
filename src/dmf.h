@@ -15,7 +15,7 @@ namespace dmf {
 const int MAX_BONES = 32;
 const int MAX_MATERIALS = 8;
 const uint8_t NO_BONE = 0xFF;
-enum { DMF_SKINNED = 1, DMF_TEXTURED = 2 };
+enum { DMF_SKINNED = 1, DMF_TEXTURED = 2, DMF_PRELIT = 4 };   // PRELIT: static, vertex argb = final lit colour (VS1 art)
 enum { BATCH_DOUBLE_SIDED = 1, BATCH_TRANSLUCENT = 2 };
 enum { ANIM_LOOP = 1 };
 enum { TEX_RGB565 = 1, TEX_ARGB4444 = 2, TEX_ARGB1555 = 3 };

@@ -1,0 +1,20 @@
+# expect: how to come back
+# cpp: accept
+@flags patrol_a patrol_b skill_fire has_token talked_brom brom_refill warden_down secret
+@script wren_main
+  flag has_token
+  flag secret
+  wren: Help?
+  choice "Yes" -> yes | cancel "No" -> no
+:yes
+  wren: Thanks.
+  end
+:no
+  end
+@script brom_main
+  brom: Hi.
+  flag talked_brom
+  flag brom_refill
+  end
+@script after_battle
+  end

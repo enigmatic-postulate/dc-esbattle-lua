@@ -158,6 +158,7 @@ struct BattleCtx {
     Ui           ui;
     FixedVec<BattleEvent, MAX_EVENTS> events;  // for the 3D presentation (cleared by it, or each tick in 2D)
     int           potions = 0;                 // the hero's potions (GDD 11.1), from/to PartyState
+    uint32_t      skills = 0;                  // SKILL_* learned (party.h), from PartyState (slice 3D-5)
     BossState     boss;
 
     BattleCtx() {}
@@ -173,7 +174,12 @@ struct Rules {
     bool guard_fix = true;    // Guard lasts until the START of the guarding actor's next turn
                               // (legacy: it expired at the end of the guarding turn, before any enemy acted)
     bool potions = true;      // 4th command: Potion (heals 12, uses one; greyed at 0). Legacy: 3 commands
+    bool learned_skills = true;   // slice 3D-5 (GDD 11.1): Fire is greyed with a lock until learned
+                                  // (BattleCtx.skills). Legacy: every skill usable
 };
+// Fire cannot be chosen: the rules ask for learned skills and the party has not learned it.
+struct BattleCtx;
+bool fire_locked(const BattleCtx& ctx);
 Rules& rules();
 
 } // namespace bt

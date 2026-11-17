@@ -27,6 +27,10 @@
 //                        Attack the Warden
 //               naive    Potion below 10 HP, else Attack the Warden
 //               noguard  as good, without the Guard
+//   smart       (slice 3D-5, the story routes) Potion below 10 HP, Fire against 2 or more enemies when it is
+//               learned, else Attack the first enemy
+// Greyed commands (slice 3D-5, task 0.3): a Potion with none left or a Fire not yet learned would be
+// ignored by the UI and stall the bot; such a choice becomes Attack on the first enemy.
 #include "../../src/battle.h"
 #include "../../src/game.h"
 #include "../../src/status.h"
@@ -114,7 +118,20 @@ char choose_command(const bt::BattleCtx& ctx) {
         if (r < 3) return (char)('0' + (int)(lcg(g_bot.rng) % (uint32_t)n_enemies));
         return r < 5 ? 'F' : 'G';
     }
+    if (!strcmp(p, "smart")) {
+        const bt::Actor* hero = ctx.active;
+        if (hero && hero->hp < 10 && ctx.potions > 0) return 'P';
+        if (n_enemies >= 2 && !bt::fire_locked(ctx)) return 'F';
+        return '0';
+    }
     return '0';
+}
+
+// A command the UI would ignore (greyed) becomes Attack on the first enemy (task 0.3).
+char with_fallback(const bt::BattleCtx& ctx, char c) {
+    if (c == 'P' && ctx.potions <= 0) return '0';
+    if ((c == 'F' || c == 'c' || c == 'b') && bt::fire_locked(ctx)) return '0';
+    return c;
 }
 
 void plan_for(char c) {
@@ -195,7 +212,7 @@ uint32_t bot_buttons() {
     }
     if (b.plan_n == 0) {
         if (ctx.ui.state != bt::UiState::Home) return 0;
-        plan_for(choose_command(ctx));
+        plan_for(with_fallback(ctx, choose_command(ctx)));
         ++b.turn;
     }
     char step = b.plan[b.plan_i];

@@ -30,6 +30,8 @@ static_assert(sizeof(eng::Vert3) == 32, "the strip copy moves one 32-byte block 
 static Stats g_stats;
 static bool g_strip_culling = true;
 void set_strip_culling(bool on) { g_strip_culling = on; }
+static bool g_near_strips = true;
+void set_near_strips(bool on) { g_near_strips = on; }
 void stats_reset() { memset(&g_stats, 0, sizeof g_stats); }
 const Stats& stats() { return g_stats; }
 void stats_add(int verts_out, int tris) { g_stats.verts_out += verts_out; g_stats.tris += tris; }
@@ -464,6 +466,10 @@ int emit_poly(const Camera& cam, const PolyVert* in, int n, eng::Vert3* out) {
 
 // ---------------------------------------------------------------------------- static props
 void prelight(const dmf::Model& m, const Mat34& world, const Light& light, uint32_t* colors) {
+    if (m.h->flags & dmf::DMF_PRELIT) {            // baked offline (tools/vs1art): the vertex colour is final
+        for (int i = 0; i < m.h->num_verts; ++i) colors[i] = m.verts[i].argb;
+        return;
+    }
     const Vec3 l = normalize(mat_dir_t(world, light.dir)) * (1.0f / 127.0f);     // light in model space
     static const float white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
     for (int i = 0; i < m.h->num_verts; ++i) {
@@ -636,38 +642,103 @@ bool draw_static(const Camera& cam, const ModelGfx& g, const Mat34& world, const
     }
     g_stats.verts_xf += nv;
     ++g_stats.statics_near;
+    // Triangles wholly in front of the near plane go out as runs of the model's own strips (a run starting on
+    // an odd triangle begins with a repeated vertex, which keeps the strip parity, i.e. the winding); those
+    // wholly beyond one screen edge are dropped (a house under the camera is mostly below the screen); the
+    // rest - crossing the near plane - are clipped one by one. (VS1 art slice: the former path sent every
+    // triangle as its own 3-vertex strip - 6,900 vertices for a VS1 house under the camera. set_near_strips(false)
+    // brings it back for the A/B test: tests/vs1art/run.sh checks the pixels are identical.)
+    if (!g_near_strips) {
+        for (int k = 0; k < m.h->num_batches; ++k) {
+            const dmf::Batch& bt = m.batches[k];
+            eng::Vert3* out = eng::vtx_begin((int)bt.num_tris * 4);
+            if (!out) return false;
+            int used = 0;
+            const uint16_t* w = m.strips + bt.first_word;
+            const uint16_t* end = w + bt.num_words;
+            while (w < end) {
+                const int len = *w++;
+                for (int j = 0; j + 2 < len; ++j) {
+                    int a = w[j], b = w[j + 1], c = w[j + 2];
+                    if (j & 1) { int tmp = a; a = b; b = tmp; }
+                    if (g_xt[a].W >= near_w && g_xt[b].W >= near_w && g_xt[c].W >= near_w) {
+                        const int idx[3] = { a, b, c };
+                        for (int q = 0; q < 3; ++q) shz_memcpy32_1(&out[used + q], &g_xv[idx[q]]);
+                        out[used + 2].flags = eng::VERT_EOL;
+                        used += 3;
+                    } else if (g_xt[a].W >= near_w || g_xt[b].W >= near_w || g_xt[c].W >= near_w) {
+                        const int idx[3] = { a, b, c };
+                        PolyVert pv[3];
+                        for (int q = 0; q < 3; ++q) {
+                            const dmf::Vertex& mv = m.verts[idx[q]];
+                            pv[q].p = mat_point(world, v3(mv.x, mv.y, mv.z));
+                            pv[q].u = mv.u; pv[q].v = mv.v; pv[q].argb = colors[idx[q]];
+                        }
+                        used += emit_poly(cam, pv, 3, out + used);
+                    }
+                }
+                w += len;
+            }
+            const int mi = bt.flags >> 8;
+            eng::vtx_end((bt.flags & dmf::BATCH_DOUBLE_SIDED) ? g.doubled[mi] : g.single[mi], used);
+            g_stats.verts_out += used;
+        }
+        return true;
+    }
+    const float sw = 2.0f * cam.cx, sh = 2.0f * cam.cy;
     for (int k = 0; k < m.h->num_batches; ++k) {
         const dmf::Batch& bt = m.batches[k];
-        eng::Vert3* out = eng::vtx_begin((int)bt.num_tris * 4);
+        eng::Vert3* out = eng::vtx_begin((int)bt.num_tris * 5 + 2 * (int)bt.num_strips);   // bound: 5 per clipped triangle
         if (!out) return false;
-        int used = 0;
+        int used = 0, tris = 0;
         const uint16_t* w = m.strips + bt.first_word;
         const uint16_t* end = w + bt.num_words;
         while (w < end) {
             const int len = *w++;
+            bool open = false;
             for (int j = 0; j + 2 < len; ++j) {
                 int a = w[j], b = w[j + 1], c = w[j + 2];
-                if (j & 1) { int tmp = a; a = b; b = tmp; }     // strip parity: keep the winding
-                if (g_xt[a].W >= near_w && g_xt[b].W >= near_w && g_xt[c].W >= near_w) {
-                    const int idx[3] = { a, b, c };
-                    for (int q = 0; q < 3; ++q) shz_memcpy32_1(&out[used + q], &g_xv[idx[q]]);
-                    out[used + 2].flags = eng::VERT_EOL;
-                    used += 3;
-                } else if (g_xt[a].W >= near_w || g_xt[b].W >= near_w || g_xt[c].W >= near_w) {
-                    const int idx[3] = { a, b, c };
-                    PolyVert pv[3];
-                    for (int q = 0; q < 3; ++q) {
-                        const dmf::Vertex& mv = m.verts[idx[q]];
-                        pv[q].p = mat_point(world, v3(mv.x, mv.y, mv.z));
-                        pv[q].u = mv.u; pv[q].v = mv.v; pv[q].argb = colors[idx[q]];
+                const bool fa = g_xt[a].W >= near_w, fb = g_xt[b].W >= near_w, fc = g_xt[c].W >= near_w;
+                if (fa && fb && fc) {
+                    const eng::Vert3 &A = g_xv[a], &B = g_xv[b], &C = g_xv[c];
+                    const bool off = (A.x < 0.0f && B.x < 0.0f && C.x < 0.0f) || (A.x > sw && B.x > sw && C.x > sw) ||
+                                     (A.y < 0.0f && B.y < 0.0f && C.y < 0.0f) || (A.y > sh && B.y > sh && C.y > sh);
+                    if (!off) {
+                        if (!open) {
+                            if (j & 1) shz_memcpy32_1(&out[used++], &g_xv[a]);     // parity: (a, a, b) is degenerate
+                            shz_memcpy32_1(&out[used++], &g_xv[a]);
+                            shz_memcpy32_1(&out[used++], &g_xv[b]);
+                            open = true;
+                        }
+                        shz_memcpy32_1(&out[used], &g_xv[c]);
+                        out[used++].flags = eng::VERT;
+                        ++tris;
+                        continue;
                     }
-                    used += emit_poly(cam, pv, 3, out + used);
+                }
+                if (open) { out[used - 1].flags = eng::VERT_EOL; open = false; }
+                if (fa || fb || fc) {
+                    if (!(fa && fb && fc)) {
+                        if (j & 1) { int tmp = a; a = b; b = tmp; }     // strip parity: keep the winding
+                        const int idx[3] = { a, b, c };
+                        PolyVert pv[3];
+                        for (int q = 0; q < 3; ++q) {
+                            const dmf::Vertex& mv = m.verts[idx[q]];
+                            pv[q].p = mat_point(world, v3(mv.x, mv.y, mv.z));
+                            pv[q].u = mv.u; pv[q].v = mv.v; pv[q].argb = colors[idx[q]];
+                        }
+                        used += emit_poly(cam, pv, 3, out + used);
+                        ++tris;
+                    }
                 }
             }
+            if (open) out[used - 1].flags = eng::VERT_EOL;
             w += len;
         }
         const int mi = bt.flags >> 8;
         eng::vtx_end((bt.flags & dmf::BATCH_DOUBLE_SIDED) ? g.doubled[mi] : g.single[mi], used);
+        g_stats.tris += tris;
+        g_stats.verts_out += used;
     }
     return true;
 }

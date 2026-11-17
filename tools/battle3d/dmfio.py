@@ -25,7 +25,7 @@ MAT = struct.Struct('<48sHH12s')
 assert HDR.size == 96 and VTX.itemsize == 32 and GRP.itemsize == 8 and BAT.size == 16
 assert BONE.size == 96 and ANIM.size == 32 and TEXH.size == 32 and MAT.size == 64
 
-SKINNED, TEXTURED = 1, 2
+SKINNED, TEXTURED, PRELIT = 1, 2, 4   # PRELIT: vertex argb is the final lit colour (static props baked offline)
 BATCH_DOUBLE_SIDED, BATCH_TRANSLUCENT = 1, 2
 MAT_BILINEAR, MAT_ALPHA = 1, 2
 TEX_RGB565, TEX_ARGB4444, TEX_ARGB1555 = 1, 2, 3
@@ -105,13 +105,13 @@ def _align(n, a):
     return (n + a - 1) // a * a
 
 
-def write_dmf(verts, groups, batches, strip_words, bones=(), anims=(), materials=(), texture=None, version=2):
+def write_dmf(verts, groups, batches, strip_words, bones=(), anims=(), materials=(), texture=None, version=2, extra_flags=0):
     """verts: structured VTX array; groups: GRP array; batches: list of dicts (flags incl. material<<8);
     strip_words: u16 array; bones: dicts name,parent,t,q,inv_bind(3x4); anims: dicts (DMF v1 clips:
     name, loop, t_bone, fps, ground_speed, t (F,3), q (F,nb,4)); materials: dicts tex, flags;
     texture: dict w,h,format,filter,texels (h,w u16). Returns the file bytes."""
     nb = len(bones)
-    flags = (SKINNED if nb else 0) | (TEXTURED if texture is not None else 0)
+    flags = (SKINNED if nb else 0) | (TEXTURED if texture is not None else 0) | extra_flags
     # Section order and 32-byte alignment of every section: the layout of the original converter
     # (tools/dmf/dmf.py), so rebuilt files are byte-identical to it.
     off = 96

@@ -38,6 +38,11 @@ bool parse(const void* data, int size, Library* out, char* err, int errlen);
 // Reads /rd/... into the library arena (static, 32-byte aligned) and validates it.
 bool load(const char* path, Library* out);
 
+// The session's library (romdisk/anims/rig_medium.dma), loaded on first use and shared by the field
+// (slice 3D-5: Wren and Brom) and the battle. nullptr if it is missing or invalid.
+const Library* shared_library();
+int anim_library_bytes();      // bytes of the library arena in use (budget reports)
+
 int   clip_find(const Library& L, const char* name);            // -1 if absent
 int   clip_ticks(const Library& L, int clip);                   // one pass, in 60 Hz ticks
 int   clip_event(const Library& L, int clip, Event e);          // tick of the event, -1 if none

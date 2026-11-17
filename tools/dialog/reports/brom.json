@@ -1,0 +1,77 @@
+{
+ "source": "Barbarian.fbx",
+ "budget": 950,
+ "parts": [
+  {
+   "part": "armleft",
+   "source_tris": 702,
+   "after_dissolve": 638,
+   "tris": 94,
+   "target": 94,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "armright",
+   "source_tris": 702,
+   "after_dissolve": 638,
+   "tris": 94,
+   "target": 94,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "bearhat",
+   "source_tris": 1030,
+   "after_dissolve": 1028,
+   "tris": 137,
+   "target": 137,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "body",
+   "source_tris": 1840,
+   "after_dissolve": 1836,
+   "tris": 244,
+   "target": 245,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "head",
+   "source_tris": 1021,
+   "after_dissolve": 979,
+   "tris": 136,
+   "target": 136,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "legleft",
+   "source_tris": 914,
+   "after_dissolve": 828,
+   "tris": 122,
+   "target": 122,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "legright",
+   "source_tris": 914,
+   "after_dissolve": 828,
+   "tris": 122,
+   "target": 122,
+   "glow": false,
+   "double_sided": false
+  }
+ ],
+ "out": "brom.dmf",
+ "tris": 949,
+ "verts": 1079,
+ "groups": 37,
+ "strips": 344,
+ "verts_per_tri": 1.725,
+ "bytes": 49440,
+ "source_tris": 7123
+}

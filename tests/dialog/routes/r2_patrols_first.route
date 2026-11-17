@@ -1,0 +1,19 @@
+# Route 2: the patrols before Wren - Brom, patrol A, Brom's rest, patrol B, Wren (she jumps to the report and
+# teaches Fire too: AD5), Brom's refill, the Warden. Fire is locked (greyed) in both patrol battles (decision D7).
+talk brom
+expect talked_brom=1 potions=3 stage=0 marker:brom=-
+chase slime_a
+expect patrol_a=1 stage=0 skill_fire=0 objective=Speak_with_Wren
+choose 0
+talk brom
+expect hp=20 cp=9 brom_refill=0
+chase slime_b
+expect patrol_b=1 stage=0 skill_fire=0 marker:wren=!
+talk wren
+expect stage=3 skill_fire=1 has_token=1 max_hp=30 hp=30 cp=2 visible:warden=1 marker:brom=...
+choose 0
+talk brom
+expect brom_refill=1 potions=3 marker:brom=-
+policy boss:good:1
+chase warden
+expect warden_down=1 stage=6 max_hp=30 patrol_a=1 patrol_b=1 skill_fire=1 has_token=1 talked_brom=1 brom_refill=1

@@ -775,9 +775,35 @@
     0.191,
     0.812
    ]
+  },
+  {
+   "name": "walk",
+   "source": "Walking_A",
+   "pack": "MovementBasic",
+   "frames": 32,
+   "seconds": 1.067,
+   "loop": true,
+   "translated": [
+    "hips",
+    "upperleg.l",
+    "upperleg.r"
+   ],
+   "events": [
+    65535,
+    65535,
+    65535,
+    65535
+   ],
+   "detect": {},
+   "bound": [
+    -0.0,
+    0.621,
+    0.069,
+    0.693
+   ]
   }
  ],
- "bytes": 258112,
+ "bytes": 265216,
  "bones": [
   "root",
   "hips",

@@ -1,0 +1,50 @@
+# tests/dialog/fixtures/ui_village.txt - the dialog UI test script (tests/dialog/run.sh: check_dialog.py).
+# Replaces romdisk/scripts/village.txt in a test copy of the romdisk. Every rule of the dialog UI appears:
+# punctuation pauses (. ! ? , and runs), a variant change (the portrait blink), Rowan's slot and its slide,
+# forced breaks, a choice without a cancel option (B does nothing), a wait and a fade with a sys: page in the
+# dark, a choice with a cancel option (B picks it), and pages that end a dialog.
+@flags patrol_a patrol_b skill_fire has_token talked_brom brom_refill warden_down
+@marker wren ! stage == 0
+
+@script wren_main
+  wren: Abc. Def, ghi!! Jk... Lm? No, sir.
+  wren(happy): One|two|three.
+  rowan: Yes.
+  choice "Up" -> a | "Mid" -> b | "Down" -> c
+:a
+:b
+:c
+  face rowan wren                 # instant commands the shipped scripts do not use: they run here (UI route, ASan)
+  face wren left
+  emote wren ?
+  anim rowan use_item
+  call helper
+  letterbox off
+  letterbox on
+  take potions 1
+  give potions 2
+  unflag talked_brom
+  set max_hp 25
+  wait 30
+  fade out 10
+  sys: Dark.
+  fade in 10
+  wren(worried): Stay or go?
+  choice "Stay" -> stay | cancel "Go" -> go
+:stay
+  wren: Stay.
+  end
+:go
+  wren(worried): Come back later.
+  end
+
+@script brom_main
+  brom: Hi.
+  end
+
+@script helper                    # call / return (no page: the timing of the UI route is unchanged)
+  emote rowan !
+  end
+
+@script after_battle
+  end

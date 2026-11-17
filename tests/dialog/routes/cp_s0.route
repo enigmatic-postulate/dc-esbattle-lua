@@ -1,0 +1,6 @@
+# Checkpoints: a loss at S0 restores C0 (the new game): Brom's potions, taken after C0, are gone again.
+talk brom
+expect potions=3 talked_brom=1
+policy guard
+chase slime_a
+expect retries=1 stage=0 cp=0 potions=0 talked_brom=0 hp=20 at_cp=1 visible:slime_a=1

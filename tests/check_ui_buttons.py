@@ -10,7 +10,9 @@ for l in open(sys.argv[1]):
 def icons(f):
     return {(float(t[8]), float(t[9])): float(t[4]) for t in frames[f] if t[0] == "S" and t[1].endswith("ui_icons.png")}
 checks = [
-    ("20", "A enters targeting", lambda r: (0.0, 0.0) not in r and (0.75, 0.0) in r),
+    # slice 3D-5 triage: since the 3D-4 UI the chosen command stays visible above the hero while targeting (the
+    # sword at 32 px, not the ring's 48 px selected icon); the rest of the ring is gone and the target arrow shows
+    ("20", "A enters targeting", lambda r: (0.75, 0.0) in r and r.get((0.0, 0.0)) == 32 and (0.25, 0.0) not in r),
     ("45", "B cancels to ring with Attack selected", lambda r: r.get((0.0, 0.0)) == 48 and r.get((0.5, 0.0)) == 32),
     ("60", "Y selects Guard", lambda r: r.get((0.0, 0.0)) == 32 and r.get((0.5, 0.0)) == 48),
 ]

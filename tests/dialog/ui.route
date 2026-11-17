@@ -1,0 +1,35 @@
+# tests/dialog/ui.route - scripted inputs for the dialog UI check (with fixtures/ui_village.txt as village.txt).
+manual
+open wren           # T3 (tick 0 = the A press)
+wait 110            # page 1 types out (1 glyph a tick, pauses after . ! ? and ,) and stays complete
+press a             # A on a complete page: the next page (a variant change: the portrait blinks)
+wait 6
+press a             # A while typing: the page completes at once
+wait 3
+press a             # next: Rowan speaks (his slot slides in)
+hold b 12           # B held: 4 glyphs a tick
+wait 20             # complete -> the choice opens by itself (it has no cancel option)
+press b             # B: nothing (no cancel option)
+stick 0 100 3       # the stick crossing +64: down
+stick 0 0 2
+press down
+press down          # clamped at the last option
+press up
+wait 2
+press a             # picks "Mid": a wait (no box), a fade out, a sys: page in the dark, a fade in
+wait 70
+press a             # the sys page: complete...
+wait 2
+press a             # ...and next (the fade in, then the worried page)
+hold b 60           # B held through the page and into the choice: it must not cancel
+wait 4
+press b             # a fresh B: the cancel option ("Go")
+wait 40
+press a             # complete or next
+wait 2
+press a
+wait 2
+hold a 4            # the closing A is held: it must not open a new dialog
+wait 30             # T4: bars out (12), camera back (20)
+press a             # a fresh press: a new dialog
+wait 30

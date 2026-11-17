@@ -1,0 +1,10 @@
+# Route 5: "Not now" and "Tell me more" loops, then accept.
+choose cancel
+talk wren
+expect stage=0 skill_fire=0
+choose 1 1 2
+talk wren                       # lore twice, then "Not now."
+expect stage=0 skill_fire=0
+choose 1 0
+talk wren                       # lore, then accept
+expect stage=1 skill_fire=1 cp=1

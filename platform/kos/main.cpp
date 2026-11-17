@@ -82,7 +82,10 @@ struct Material3 { pvr_poly_hdr_t hdr; pvr_list_t list; };
 static Material3 g_mats[256];       // village ~90 (house variants per yaw x opaque/faded copies) + battle ~30
 static int g_nmats = 0;
 
-const int ARENA_VERTS = 16384;                      // 512 KiB; the village uses ~5-9k per frame
+// 640 KiB. Slice 3D-5: was 16,384 (512 KiB) - the untouched 3D-4 build already peaked at 15,844 on the field
+// scripts and Wren and Brom took it to 16,363; a full arena drops the last batches (props). 20,480 x 32 B plus
+// the 2D overlay stays well inside the 1 MiB TA vertex buffer.
+const int ARENA_VERTS = 20480;
 static pvr_vertex_t g_arena[ARENA_VERTS] __attribute__((aligned(32)));
 struct Batch3 { int mat, first, count; };
 static Batch3 g_batches3[512];      // battle: props + characters + weapons + FX batches
@@ -113,6 +116,14 @@ struct SpriteCmd { float cx, cy, w, h, a, u0, v0, u1, v1, z; uint32 argb; };
 
 static std::vector<SpriteCmd> g_q_nearest[eng::MAX_SPRITES];
 static std::vector<SpriteCmd> g_q_bilinear[eng::MAX_SPRITES];
+
+// Slice 3D-5 (DoD T3, no heap allocation per frame): the queues of alpha textures (icons, fonts, the dialog
+// font: a dialog page + its shadow + a choice box is ~450 glyph sprites) are reserved when the texture is made,
+// so a frame never grows a vector. Opaque textures (portraits, sheets) draw a few sprites at most.
+static void reserve_queues(int slot, bool alpha) {
+    g_q_nearest[slot].reserve(alpha ? 640 : 16);
+    g_q_bilinear[slot].reserve(alpha ? 64 : 16);
+}
 static int g_seq = 0;              // sprite draw calls this frame (auto depth)
 
 struct RectCmd { int list; float x, y, w, h; float z; uint32 argb; };
@@ -200,7 +211,8 @@ static void rect_flush_list(int list) {
     }
 }
 
-// --- Debug input overlay (top-left; on top of everything) -------------------
+// --- Debug input overlay (top-left; on top of everything): DIAG / INPUT_OVERLAY builds only ------------
+#if BATTLE_DIAG || defined(INPUT_OVERLAY)
 static void draw_input_overlay() {
     auto col = [](bool pressed) { return pressed ? 0xFF00FF00 : 0xFF202020; };
     const int LIST = PVR_LIST_TR_POLY;
@@ -212,6 +224,7 @@ static void draw_input_overlay() {
     float ax = (float)g_in.joyx / 128.0f, ay = (float)g_in.joyy / 128.0f;
     rectq_push(LIST, 120 + ax * 30.0f - 3.0f, 45 + ay * 30.0f - 3.0f, 6, 6, Z, 0xFFFF0000);
 }
+#endif
 
 static void check_file(const char* path) {
     file_t f = fs_open(path, O_RDONLY);
@@ -255,6 +268,7 @@ Sprite sprite_load(const char* path, bool alpha) {
     pvr_poly_compile(&s->hdr_bilinear, &cxt);
 
     DIAG("  sprite %d ready, VRAM textures total %lu KiB\n", g_sprite_count + 1, (unsigned long)(g_vram_bytes / 1024));
+    reserve_queues(g_sprite_count, alpha);
     return ++g_sprite_count;   // handle 1..N
 }
 
@@ -297,7 +311,62 @@ Sprite texture_create(const uint16_t* texels, int w, int h, int fmt) {
     pvr_poly_cxt_txr(&cxt, list, s->pvr_fmt | (int)PVR_TXRFMT_TWIDDLED, w, h, s->tex, PVR_FILTER_BILINEAR);
     pvr_poly_compile(&s->hdr_bilinear, &cxt);
     DIAG("  texture %d ready, VRAM textures total %lu KiB\n", g_sprite_count + 1, (unsigned long)(g_vram_bytes / 1024));
+    reserve_queues(g_sprite_count, s->alpha);
     return ++g_sprite_count;
+}
+
+// VQ texture (the village ground): the codebook and the twiddled index bytes go to VRAM as they are; the texture
+// address is the codebook's. GROUND_NO_VQ: decoded here and uploaded as plain RGB565 (w*h*2 bytes of VRAM) -
+// the bisecting build if the ground ever shows scrambled blocks on hardware (TRIAGE).
+Sprite texture_create_vq(const void* data, int bytes, int w, int h) {
+    DIAG("texture_create_vq(%dx%d, %d bytes) slot %d\n", w, h, bytes, g_sprite_count);
+    if (g_sprite_count >= MAX_SPRITES) { BOOT("sprite limit reached\n"); return 0; }
+    if (w != h || w < 16 || w > 1024 || (w & (w - 1)) || bytes != VQ_CODEBOOK_BYTES + w * h / 4) return 0;
+#if defined(GROUND_NO_VQ)
+    uint16_t* lin = (uint16_t*)malloc((size_t)w * h * 2);          // boot time only; kept (KOS keeps the pointer)
+    if (!lin) return 0;
+    vq_decode((const uint8_t*)data, w, h, lin);
+    return texture_create(lin, w, h, 1);
+#else
+    ::Sprite* s = &g_sprites[g_sprite_count];
+    memset(&s->img, 0, sizeof(s->img));
+    s->img.w = (uint32_t)w;
+    s->img.h = (uint32_t)h;
+    s->img.byte_count = 0;                        // not a kos_img: texture_update refuses it
+    s->alpha = false;
+    s->pvr_fmt = (int)PVR_TXRFMT_RGB565 | (int)PVR_TXRFMT_VQ_ENABLE;
+    s->tex = pvr_mem_malloc((size_t)bytes);
+    if (!s->tex) { BOOT("pvr_mem_malloc failed (texture_create_vq)\n"); return 0; }
+    pvr_txr_load((void*)data, s->tex, (size_t)bytes);
+    g_vram_bytes += (uint32)bytes;
+    pvr_poly_cxt_t cxt;
+    pvr_poly_cxt_txr(&cxt, PVR_LIST_OP_POLY, s->pvr_fmt | (int)PVR_TXRFMT_TWIDDLED, w, h, s->tex, PVR_FILTER_NONE);
+    pvr_poly_compile(&s->hdr_nearest, &cxt);
+    pvr_poly_cxt_txr(&cxt, PVR_LIST_OP_POLY, s->pvr_fmt | (int)PVR_TXRFMT_TWIDDLED, w, h, s->tex, PVR_FILTER_BILINEAR);
+    pvr_poly_compile(&s->hdr_bilinear, &cxt);
+    DIAG("  VQ texture %d ready, VRAM textures total %lu KiB\n", g_sprite_count + 1, (unsigned long)(g_vram_bytes / 1024));
+    reserve_queues(g_sprite_count, false);
+    return ++g_sprite_count;
+#endif
+}
+
+// Slice 3D-5 (portraits): new texels for a memory texture, into the same VRAM block, through the same
+// twiddling upload as texture_create (pvr_txr_load_kimg). The caller (src/portrait.cpp) only rewrites a
+// slot that the last 2 frames did not draw, so the PVR never samples a half-written texture.
+// twiddled: already in PVR order (src/portrait.cpp twiddles its cache at load time) - a plain 32 KiB copy
+// (pvr_txr_load: store queues), no per-texel work in the frame; otherwise KOS twiddles as at creation.
+bool texture_update(Sprite handle, const uint16_t* texels, bool twiddled) {
+    if (handle < 1 || handle > g_sprite_count || !texels) return false;
+    ::Sprite* s = &g_sprites[handle - 1];
+    if (!s->tex || s->img.byte_count == 0) return false;
+    if (twiddled) {
+        pvr_txr_load((void*)texels, s->tex, s->img.byte_count);
+        return true;
+    }
+    kos_img_t img = s->img;                        // same w, h, format and byte count as at creation
+    img.data = (void*)texels;
+    pvr_txr_load_kimg(&img, s->tex, PVR_TXRLOAD_16BPP);
+    return true;
 }
 
 Material material_create(Sprite tex, int flags) {
@@ -445,7 +514,10 @@ int main(int, char**) {
     check_file("/rd/font.png");
     check_file("/rd/models/knight.dmf");
     check_file("/rd/models/skel_warrior.dmf");
-    check_file("/rd/models/house_stone.dmf");
+    check_file("/rd/models/house_stone_r0.dmf");  // the VS1 village art (docs/SLICE_VS1_ART.md)
+    check_file("/rd/models/wagon_r0.dmf");
+    check_file("/rd/tex/glass.png");
+    check_file("/rd/maps/village.gnd");           // the painted ground (docs/GROUND_ART.md)
     check_file("/rd/tex/ground.png");
     check_file("/rd/models/skel_mage.dmf");
     check_file("/rd/anims/rig_medium.dma");       // slice 3D-4: the 3D battle
@@ -455,6 +527,20 @@ int main(int, char**) {
     check_file("/rd/models/house_stone_b.dmf");
     check_file("/rd/tex/fx.tex");
     check_file("/rd/tex/dirt.png");
+    // slice 3D-5: dialog, scripts, portraits, Wren and Brom
+    check_file("/rd/fonts/dialog.fnt");
+    check_file("/rd/fonts/dialog.tex");
+    check_file("/rd/scripts/village.txt");
+    check_file("/rd/scripts/speakers.txt");
+    check_file("/rd/models/wren.dmf");
+    check_file("/rd/models/brom.dmf");
+    {
+        static const char* const PORTRAITS[] = { "rowan", "wren", "brom" };
+        static const char* const VARIANTS[] = { "neutral", "happy", "worried" };
+        char p[64];
+        for (const char* n : PORTRAITS)
+            for (const char* v : VARIANTS) { snprintf(p, sizeof p, "/rd/portraits/%s_%s.dtx", n, v); check_file(p); }
+    }
 
     eng::seed_random((uint32_t)timer_ms_gettime64());
 #if !defined(DIAG_SKIP_GAME)
@@ -505,7 +591,9 @@ int main(int, char**) {
 #if !defined(DIAG_SKIP_GAME) && !defined(DIAG_SKIP_DRAW)
         bt::game_draw();                          // queues sprites + rects
 #endif
-        draw_input_overlay();
+#if BATTLE_DIAG || defined(INPUT_OVERLAY)
+        draw_input_overlay();       // debug: pad state top left (make DIAG=1 or INPUT_OVERLAY=1); it sits on the objective HUD
+#endif
         BOOT_F("frame %d: drawn (%d 3D verts in %d batches, %d rects)\n", g_diag_frame, g_arena_used, g_nbatches3, g_rect_qn);
 
         DIAG_F("frame %d: OP list (rects queued=%d)\n", g_diag_frame, g_rect_qn);

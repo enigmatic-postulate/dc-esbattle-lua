@@ -1,0 +1,20 @@
+# Route 1 (docs/NEXT_SLICE_DIALOG.md 4): canonical - Wren, patrol A, patrol B, Wren, Brom, the Warden.
+expect stage=0 potions=0 max_hp=20 skill_fire=0 marker:wren=! marker:brom=... visible:warden=0 objective=Speak_with_Wren
+choose 0
+talk wren
+expect stage=1 skill_fire=1 cp=1 objective=Defeat_the_skeleton_patrols_(0/2) marker:wren=-
+chase slime_a
+expect patrol_a=1 stage=1 objective=Defeat_the_skeleton_patrols_(1/2) visible:slime_a=0
+chase slime_b
+expect patrol_b=1 stage=2 objective=Report_to_Wren marker:wren=!
+talk wren
+expect stage=3 has_token=1 max_hp=30 hp=30 cp=2 visible:warden=1 objective=Face_what_waits_on_the_east_road marker:brom=...
+talk brom
+expect talked_brom=1 potions=3 marker:brom=...
+choose 0
+talk brom
+expect brom_refill=1 potions=3 hp=30 cp=9 marker:brom=-
+chase warden
+expect warden_down=1 stage=6 objective= visible:warden=0
+talk wren
+expect stage=6

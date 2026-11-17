@@ -26,8 +26,10 @@ struct EncounterDef {
     int         count;
     EnemySpec   enemies[4];
     const char* arena;       // 3D arena (nullptr: "village")
-    int         hero_max_hp; // > 0: the hero enters with this max HP, fully healed (the boss: Wren's blessing stand-in)
-    int         potions;     // > 0: the hero carries at least this many potions (the boss: waystone stand-in)
+    // --battle-test only (slice 3D-5): the "boss-ready" party the balance tests use (max HP 30, fully healed,
+    // 3 potions). In the game these come from the quest (Wren's blessing, Brom's potions; Progress).
+    int         test_max_hp; // > 0: max HP of the battle-test hero
+    int         test_potions;
 };
 
 const EncounterDef* encounter_by_id(const char* id);   // nullptr if unknown

@@ -27,4 +27,4 @@ map 30 20
 spawn 3 10 right
 entity slime_a enemy slime 12 4 down slimes_2
 entity slime_b enemy slime 20 12 left test_slimes patrol 1 0 3
-entity guard npc guard 10 16 down guard_duel
+entity guard enemy guard 10 16 down guard_duel     # slice 3D-5: NPCs talk; the duel guard is an enemy here

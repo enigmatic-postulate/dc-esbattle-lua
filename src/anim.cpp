@@ -88,6 +88,15 @@ bool load(const char* path, Library* out) {
     return true;
 }
 
+int anim_library_bytes() { return g_used; }
+
+const Library* shared_library() {
+    static Library lib;
+    static bool tried = false, ok = false;
+    if (!tried) { tried = true; ok = load("/rd/anims/rig_medium.dma", &lib); }
+    return ok ? &lib : nullptr;
+}
+
 int clip_find(const Library& L, const char* name) {
     for (int k = 0; k < L.num_clips; ++k)
         if (strncmp(L.clips[k].name, name, sizeof L.clips[k].name) == 0) return k;

@@ -1,68 +1,83 @@
-# village - the 3D overworld (VS2). Legend: . grass  , flowers  = flagstone path  (walkable)
-#         # fence (3D fence runs between neighbouring # tiles)   T tree   ~ water   (blocking)
-# prop <model> <x> <y> <rot_deg> [solid <w> <h>]   model = romdisk/models/<model>.dmf, origin at (x, y) in tiles,
-#      rot 0 = the model's front (a house's door) faces south; a solid footprint of w x h tiles is centred on (x, y)
-# entity <id> <enemy|npc> <slime|guard> <x> <y> <facing> <encounter> [patrol <dx> <dy> <len>] [after <id> [<id>]]
-#      3D: slime -> skeleton warrior, guard -> skeleton mage
-#      after: dormant (not drawn, not touchable) until those entities are defeated
+# village - the 3D overworld. Layout, ground and props: the VS1 village (assets/vs1_art/, docs/SLICE_VS1_ART.md),
+# which is also the map the GDD describes (40x30, 5 houses; Rowan at the west gate (2,15), Wren by the first
+# house (6,17), Brom at the stone house (21,10), the patrols at (31,6) and (26,15)).
+# Legend: . grass  , flowers  = dirt path  (walkable; the ground is one generated texture, field3d.cpp)
+#         # fence (3D fence runs between neighbouring # tiles)   T tree   ~ water   (blocking; not used here)
+# prop <model> <x> <y> <rot_deg> [solid <w> <h>]   model = romdisk/models/<model>_r<rot>.dmf (the VS1 per-yaw
+#      variants) or <model>.dmf; origin at (x, y) in tiles; rot 0 = the front (a house's door) faces south;
+#      a solid footprint of w x h tiles (after rotation) is centred on (x, y)
+# Layout rule (VS1, frame budget): houses along the road >= 14 tiles apart, so the field camera never frames
+# more than three houses at once.
+# entity <id> npc   <look> <x> <y> <facing> talk <script> [patrol <dx> <dy> <len>] [if <cond...>]
+# entity <id> enemy <look> <x> <y> <facing> <encounter> [patrol <dx> <dy> <len>] [after <id> [<id>]] [win <flag>] [if <cond...>]
+#      looks: slime -> skeleton warrior, guard -> skeleton mage, mage -> Wren (the Mage), smith -> Brom (the Barbarian)
+#      talk: the script A runs (romdisk/scripts/village.txt); touching an NPC never starts a battle (slice 3D-5)
+#      win: the quest flag set when this entity's battle is won;  if: the rest of the line is a condition
 name village
-map 36 28
-####################################
-#................=.................#
-#.T.T....T.......=.....T...~~~~....#
-#.....T..........=...T....~~~~~~.T.#
-#..T.........T...=........~~~~~~...#
-#..........,.....=........~~~~~~...#
-#...######.#####.=..........~~~....#
-#.T..............=...............T.#
-#................=.................#
-#................=.................#
-#................=.................#
-#................=.................#
-#.....==...==..=====,==...==.......#
-#....,==...==..=====.==...==.......#
-#==================================#
-#........==....=====....==.........#
-#........==...,=====....==....,....#
-#................=.................#
-#................=.................#
-#.............T..=.................#
-#.T..............=.................#
-#..........T.....=.,.............T.#
-#.....,..........=...........T.....#
-#..T.............=.................#
-#............T...=.............T...#
-#.T..T...........=..T....,.......T.#
-#................=.................#
-####################################
-spawn 17 22 up
-prop house_stone     8.0  10.0    0 solid 4 4
-prop house_plaster  13.0  10.0    0 solid 4 4
-prop house_plaster  23.0  10.0    0 solid 4 4
-prop house_stone    28.0  10.0    0 solid 4 4
-prop house_stone     9.0  19.0  180 solid 4 4
-prop house_plaster  24.0  19.0  180 solid 4 4
-prop wagon          21.5  19.0   90 solid 3 2
-prop crate           5.5  12.5    0 solid 1 1
-prop crate          15.5  11.5   20 solid 1 1
-prop crate          30.5  12.5    0 solid 1 1
-prop crate          31.5  12.5   35 solid 1 1
-prop crate          12.5  18.5    0 solid 1 1
-prop boulder_a      31.0   7.0   30 solid 2 2
-prop boulder_b      32.5   5.5    0 solid 1 1
-prop boulder_b       4.5  17.5  200 solid 1 1
-prop arch           17.0  18.0    0
-prop bush            5.4   9.2    0
-prop bush           15.6   8.6   40
-prop bush           20.6   9.3   10
-prop bush           25.5  16.5    0
-prop bush            6.6  16.6   70
-prop bush           19.4  17.4    0
-prop bush           11.4  15.6    0
-prop bush           31.4   8.6    0
-entity slime_a enemy slime 12 14 down slimes_2
-entity slime_b enemy slime 21 14 left test_slimes patrol 1 0 4
-entity guard npc guard 24 6 down guard_duel
-# slice 3D-4: the Bone Warden waits at the east end of the road (the barrow gate, GDD 9/12) and wakes
-# once both skeleton patrols are down; his battle uses the barrow arena (romdisk/arenas/barrow.txt)
-entity warden enemy guard 33 14 left warden after slime_a slime_b
+map 40 30
+......................,.................
+....,.........,..........,.,.........,..
+..,,...........,.............,.,......,.
+...........,......................,.,...
+..................,.,,....,.............
+..........................,.............
+...,............................,.......
+....,..............,....................
+.....,..................................
+........,..........==.......,.......,...
+...................==...................
+............,......==........,..........
+...............,...==...................
+...==..............==......,...,..,==...
+...==..............==..............==...
+========================================
+========================================
+.....,,.....==...............==.........
+....,.......==.........,.....==,...,,,..
+...,......,.==........,......==.........
+............==,....,.....,...==.........
+..,.........==...............==.....,...
+...........,.................==.........
+.....................,..................
+....,...................................
+........................................
+...................................,....
+...................................,....
+........................,...............
+...,.....................,...........,..
+spawn 2 15 right
+# houses (VS1 h1..h5), the west gate, door steps
+prop house_plaster    4.0  11.0    0 solid 4 4
+prop house_stone     19.0   7.0    0 solid 4 4
+prop house_plaster   36.0  11.0    0 solid 4 4
+prop house_stone     13.0  24.0  180 solid 4 4
+prop house_plaster   29.0  25.0  180 solid 4 4
+prop arch             0.5  16.0   90
+prop border           4.0  13.5    0
+prop border          20.0   9.5    0
+prop border          36.0  13.5    0
+# yard props
+prop wagon           10.0   6.0    0 solid 2 4
+prop crate            7.5  11.5    0 solid 1 1
+prop crate            7.5  12.5    0 solid 1 1
+prop crate           23.5   7.5    0 solid 1 1
+prop fence           15.0  21.5    0 solid 2 1
+prop fence           17.0  21.5    0 solid 2 1
+prop fence           32.0  22.5    0 solid 2 1
+prop fence           34.0  22.5    0 solid 2 1
+# boulders (Poly Haven)
+prop boulder03        2.5   3.5   90 solid 3 3
+prop boulder02       30.5   3.0    0 solid 3 2
+prop boulder02       37.0  25.5   90 solid 2 3
+prop boulder03       22.5  26.5    0 solid 3 3
+prop boulder02        5.5  26.0    0 solid 3 2
+# the skeleton patrols (GDD 9: north-east (31,6) and on the road (26,15))
+entity slime_a enemy slime 31 6 down slimes_2 win patrol_a
+entity slime_b enemy slime 26 15 left test_slimes patrol 1 0 4 win patrol_b
+# Wren (the village mage, quest giver) by the first house, walking between the road and her door (GDD 9.1);
+# Brom (smith and innkeeper) beside the stone house's door path (GDD 9.2)
+entity wren npc mage 6 17 up talk wren_main patrol 0 -1 3
+entity brom npc smith 21 10 down talk brom_main
+# slice 3D-5 (AD3): the Bone Warden waits at the east end of the road (the barrow gate, GDD 9/12) and
+# appears once Wren's token is given; his battle uses the barrow arena (romdisk/arenas/barrow.txt)
+entity warden enemy guard 38 15 left warden win warden_down if has_token

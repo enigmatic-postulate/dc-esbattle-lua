@@ -1,0 +1,78 @@
+# tests/dialog/fixtures/talk_map.txt - the village with Wren and Brom two tiles apart (10,13) and (12,13), so the
+# prompt-geometry check sees the "nearest wins" and "ties go to the lower entity index" cases (check_talk.py).
+# village - the 3D overworld (VS2). Legend: . grass  , flowers  = flagstone path  (walkable)
+#         # fence (3D fence runs between neighbouring # tiles)   T tree   ~ water   (blocking)
+# prop <model> <x> <y> <rot_deg> [solid <w> <h>]   model = romdisk/models/<model>.dmf, origin at (x, y) in tiles,
+#      rot 0 = the model's front (a house's door) faces south; a solid footprint of w x h tiles is centred on (x, y)
+# entity <id> npc   <look> <x> <y> <facing> talk <script> [patrol <dx> <dy> <len>] [if <cond...>]
+# entity <id> enemy <look> <x> <y> <facing> <encounter> [patrol <dx> <dy> <len>] [after <id> [<id>]] [win <flag>] [if <cond...>]
+#      looks: slime -> skeleton warrior, guard -> skeleton mage, mage -> Wren (the Mage), smith -> Brom (the Barbarian)
+#      talk: the script A runs (romdisk/scripts/village.txt); touching an NPC never starts a battle (slice 3D-5)
+#      after: dormant (not drawn, not touchable) until those entities are defeated
+#      win: the quest flag set when this entity's battle is won
+#      if: the rest of the line is a condition (GDD 7.4 syntax); false = hidden and untouchable
+name village
+map 36 28
+####################################
+#................=.................#
+#.T.T....T.......=.....T...~~~~....#
+#.....T..........=...T....~~~~~~.T.#
+#..T.........T...=........~~~~~~...#
+#..........,.....=........~~~~~~...#
+#...######.#####.=..........~~~....#
+#.T..............=...............T.#
+#................=.................#
+#................=.................#
+#................=.................#
+#................=.................#
+#.....==...==..=====,==...==.......#
+#....,==...==..=====.==...==.......#
+#==================================#
+#........==....=====....==.........#
+#........==...,=====....==....,....#
+#................=.................#
+#................=.................#
+#.............T..=.................#
+#.T..............=.................#
+#..........T.....=.,.............T.#
+#.....,..........=...........T.....#
+#..T.............=.................#
+#............T...=.............T...#
+#.T..T...........=..T....,.......T.#
+#................=.................#
+####################################
+spawn 17 22 up
+prop house_stone     8.0  10.0    0 solid 4 4
+prop house_plaster  13.0  10.0    0 solid 4 4
+prop house_plaster  23.0  10.0    0 solid 4 4
+prop house_stone    28.0  10.0    0 solid 4 4
+prop house_stone     9.0  19.0  180 solid 4 4
+prop house_plaster  24.0  19.0  180 solid 4 4
+prop wagon          21.5  19.0   90 solid 3 2
+prop crate           5.5  12.5    0 solid 1 1
+prop crate          15.5  11.5   20 solid 1 1
+prop crate          30.5  12.5    0 solid 1 1
+prop crate          31.5  12.5   35 solid 1 1
+prop crate          12.5  18.5    0 solid 1 1
+prop boulder_a      31.0   7.0   30 solid 2 2
+prop boulder_b      32.5   5.5    0 solid 1 1
+prop boulder_b       4.5  17.5  200 solid 1 1
+prop arch           17.0  18.0    0
+prop bush            5.4   9.2    0
+prop bush           15.6   8.6   40
+prop bush           20.6   9.3   10
+prop bush           25.5  16.5    0
+prop bush            6.6  16.6   70
+prop bush           19.4  17.4    0
+prop bush           11.4  15.6    0
+prop bush           31.4   8.6    0
+entity slime_a enemy slime 12 14 down slimes_2 win patrol_a
+entity slime_b enemy slime 21 14 left test_slimes patrol 1 0 4 win patrol_b
+# slice 3D-5: Wren (the village mage, quest giver) by the first house and Brom (smith and innkeeper) at the
+# stone house's door (AD1: the GDD's (6,17) and (21,10) are hidden by a roof / inside a house on this map)
+entity wren npc mage 10 13 down talk wren_main
+entity brom npc smith 12 13 down talk brom_main
+# slice 3D-5 (AD3): the Bone Warden waits at the east end of the road (the barrow gate, GDD 9/12) and
+# appears once Wren's token is given; his battle uses the barrow arena (romdisk/arenas/barrow.txt)
+entity warden enemy guard 33 14 left warden win warden_down if has_token
+# guard (24,6) guard_duel: retired from the map (GDD G7, decision D5); the encounter stays for the battle tests

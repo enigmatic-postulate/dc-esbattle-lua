@@ -1,0 +1,21 @@
+  KILLED   recoil direction flipped                 by attack_win.dyadic.1    DIVERGENCE at frame 29 call #1: field2 |d|=6.25
+  KILLED   swap-remove skips swapped-in element     by attack_win.dyadic.1    DIVERGENCE at frame 73 call #16: alpha
+  SURVIVED erase() instead of swap-remove order    
+  KILLED   status expires at <0 instead of <=0      by cancel.dyadic.1        DIVERGENCE at frame 192 call #72: text
+  KILLED   home-ring left wrap wrong                by cancel.dyadic.1        DIVERGENCE at frame 45 call #15: field4 |d|=9.9
+  KILLED   target entry lock dropped                by lock_edge.dyadic.1     DIVERGENCE at frame 11 call #15: field2 |d|=308
+  KILLED   Lua `and` operand order swapped (B)      by lock_edge.jitter.1     DIVERGENCE at frame 179 call #15: field2 |d|=308
+  KILLED   Lua `and` operand order swapped (A)      by lock_edge.dyadic.1     DIVERGENCE at frame 194 call #15: field2 |d|=308
+  KILLED   elseif ported as independent if          by fuzz.dyadic.13         DIVERGENCE at frame 49 call #16: field4 |d|=9.9
+  SURVIVED min-1 damage clamp forgotten            
+  SURVIVED AOE 0.65 scaling truncated wrong        
+  KILLED   burn applied in resolve (ordering)       by cancel.dyadic.1        DIVERGENCE at frame 52 call #9: field4 |d|=11
+  KILLED   alpha rounding (+0.5) dropped            by attack_win.dyadic.1    DIVERGENCE at frame 30 call #20: alpha
+  KILLED   hurt marker only for living actors       by attack_win.dyadic.1    DIVERGENCE at frame 368 call #0: sprite
+  KILLED   UI idle-baseline replaced by edge        by hold_a.jitter.1        DIVERGENCE at frame 139 call #15: field2 |d|=308
+  KILLED   state change applied same frame          by attack_win.dyadic.1    DIVERGENCE at frame 28 call #1: field6 |d|=0.00936
+  KILLED   pip fill drawn before border             by cancel.dyadic.1        DIVERGENCE at frame 52 call #10: rgb
+  KILLED   enemy wobble uses sin*0.1 w/o anim       by attack_win.dyadic.1    DIVERGENCE at frame 29 call #1: field6 |d|=0.000936
+  KILLED   turn index not wrapped via order         by cancel.dyadic.1        DIVERGENCE at frame 192 call #5: kind/arity
+  SURVIVED guard rounding (d+1)/2 -> d/2           
+mutation score: 16/20

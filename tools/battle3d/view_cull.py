@@ -43,9 +43,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('arena'); ap.add_argument('model'); ap.add_argument('cams'); ap.add_argument('out')
     ap.add_argument('--every', type=int, default=1, help='use every Nth distinct camera')
-    ap.add_argument('--source', help='source model (default: the placed model itself)')
+    ap.add_argument('--source', help='source model name in romdisk/models or a .dmf path (default: the placed model itself)')
     a = ap.parse_args()
-    m = dmfio.read_dmf(os.path.join(os.path.dirname(a.arena), '..', 'models', (a.source or a.model) + '.dmf'))
+    src = a.source or a.model
+    m = dmfio.read_dmf(src if src.endswith('.dmf') else os.path.join(os.path.dirname(a.arena), '..', 'models', src + '.dmf'))
     x, z, rot, sc = prop_place(a.arena, a.model)
     world = preview.trs_y((x, 0, z), np.radians(rot), sc)
     v = m['verts']

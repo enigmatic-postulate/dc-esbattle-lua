@@ -38,4 +38,18 @@ void models_make_faded(LoadedModel& lm) {
     }
 }
 
+bool models_glow_range(const dmf::Model& m, int* first, int* count) {
+    *first = *count = 0;
+    for (int b = 0; b < m.h->num_batches; ++b) {
+        const int mi = m.batches[b].flags >> 8;
+        if (mi <= 0 || mi >= m.num_mats || m.mat_tex[mi] != 0) continue;
+        int lo = 1 << 30, hi = -1;
+        const uint16_t* w = m.strips + m.batches[b].first_word;
+        const uint16_t* end = w + m.batches[b].num_words;
+        while (w < end) { const int len = *w++; for (int j = 0; j < len; ++j) { lo = w[j] < lo ? w[j] : lo; hi = w[j] > hi ? w[j] : hi; } w += len; }
+        if (hi >= lo) { *first = lo; *count = hi - lo + 1; return true; }
+    }
+    return false;
+}
+
 }

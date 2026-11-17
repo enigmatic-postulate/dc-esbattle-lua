@@ -92,6 +92,9 @@ int draw_ground_quads(const Camera& cam, eng::Material mat, const GroundQuad* q,
 // Debug/test switch: per-strip off-screen culling of static props (default on). Turning it off
 // must not change the picture (tests/slice3d: pixel-identical frames), only the work done.
 void set_strip_culling(bool on);
+// Debug/test switch: a static prop crossing the near plane sends its in-front triangles as runs of its own strips
+// (default on) or, off, each triangle as its own strip (the former path). Must not change the picture.
+void set_near_strips(bool on);
 
 // Per-frame statistics (reset by stats_reset; read by DIAG builds and the host harness).
 struct Stats { int models, models_culled, statics, statics_culled, statics_near, strips_culled, tris, verts_xf, verts_out; };

@@ -3,7 +3,7 @@
 `.dma` holds skeletal clips shared by every model with the same skeleton. Every KayKit character
 uses `Rig_Medium` (23 bones, identical rest transforms), so one copy of each clip serves the
 Knight, the three skeletons, the Mage and the unconverted characters. Slice 3D-4 ships one
-library: `romdisk/anims/rig_medium.dma` (28 clips, 252 KiB).
+library: `romdisk/anims/rig_medium.dma` (29 clips, 259 KiB; slice 3D-5 appended `walk` for the field NPCs).
 
 * **Writer and reference math:** `tools/battle3d/dmfio.py` (`write_dma`, `read_dma`, `sample_clip`).
 * **Builder:** `tools/battle3d/build_anims.py` (Blender's Python): samples the packs' actions into the
@@ -81,6 +81,7 @@ the battle draws nothing animated (it still plays: the rules never depend on the
 | skel_rise | Skeletons_Awaken_Floor | 70 | | | Raise Dead (out of the dirt) |
 | skel_death | Skeletons_Death | 61 | | collapse 26 | skeletons fall apart |
 | skel_taunt | Skeletons_Taunt | 32 | | | defeat |
+| walk | Walking_A (MovementBasic) | 32 | yes | | slice 3D-5: Wren and Brom walking on the field |
 
 Not included: `Spawn_Air` / `Spawn_Ground` and the `EXPERIMENTAL` clip animate bone **scale**,
 which neither format stores.

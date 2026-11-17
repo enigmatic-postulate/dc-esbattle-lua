@@ -8,6 +8,7 @@
 #include "skills.h"
 #include "status.h"
 #include "targeting.h"
+#include "text.h"
 #include "ui.h"
 #include <stdio.h>
 #include <string.h>
@@ -24,7 +25,7 @@ static ModelGfx g_flash[K_COUNT];                    // every material -> untext
 static ModelGfx g_wpn_flash[K_COUNT][2];
 static Mat34 g_idle_skin[K_COUNT][dmf::MAX_BONES];   // idle pose, for the baked lighting
 const int LIT_BUCKETS = 32;
-const int MAX_LIT_VERTS = 2048;
+const int MAX_LIT_VERTS = 2304;     // the Knight with VS1's head: 2,280 vertices
 // Baked lighting per view, double buffered: a new yaw bucket is baked into the hidden buffer a slice
 // per frame (BAKE_PER_FRAME vertices over all views) while the old one is shown, then swapped.
 static uint32_t g_lit[MAX_ACTORS][2][MAX_LIT_VERTS];
@@ -100,16 +101,7 @@ void b3_draw_init() {
         static dmf::Pose pose;
         anim::sample(g_b3.lib, kr.bind, lm.m, anim::clip_find(g_b3.lib, KINDS[k].idle), 0.0f, &pose);
         dmf::pose_skin(lm.m, pose, g_idle_skin[k]);
-        for (int b = 0; b < lm.m.h->num_batches; ++b) {
-            const int mi = lm.m.batches[b].flags >> 8;
-            if (mi > 0 && lm.m.mat_tex[mi] == 0) {
-                int lo = 1 << 30, hi = -1;
-                const uint16_t* w = lm.m.strips + lm.m.batches[b].first_word;
-                const uint16_t* end = w + lm.m.batches[b].num_words;
-                while (w < end) { const int len = *w++; for (int j = 0; j < len; ++j) { lo = w[j] < lo ? w[j] : lo; hi = w[j] > hi ? w[j] : hi; } w += len; }
-                if (hi >= lo) { g_eye_first[k] = lo; g_eye_count[k] = hi - lo + 1; }
-            }
-        }
+        models_glow_range(lm.m, &g_eye_first[k], &g_eye_count[k]);
     }
 }
 
@@ -119,9 +111,9 @@ static void bake_slice(View& v, int vi, int bucket, uint32_t* out, int v0, int v
     const dmf::Model& m = models_at(kr.model).m;
     prelight_posed_range(m, g_idle_skin[v.kind], 6.28318531f * (float)bucket / LIT_BUCKETS, g_b3.arena->light, out, v0, v1);
     for (int i = v0; i < v1; ++i) out[i] = arena_light_color_fast(*g_b3.arena, out[i]);
-    if (v.kind == K_WARDEN)                                   // the Warden's eyes burn purple
-        for (int i = g_eye_first[v.kind]; i < g_eye_first[v.kind] + g_eye_count[v.kind]; ++i)
-            if (i >= v0 && i < v1) out[i] = 0xFFD070FF;
+    // the skeletons' eyes glow in their own colour, unlit (VS1); the Warden's burn purple
+    for (int i = g_eye_first[v.kind]; i < g_eye_first[v.kind] + g_eye_count[v.kind]; ++i)
+        if (i >= v0 && i < v1) out[i] = v.kind == K_WARDEN ? 0xFFD070FFu : m.verts[i].argb;
     (void)vi;
 }
 
@@ -401,9 +393,12 @@ static void draw_hud(BattleCtx& ctx, const Camera& cam, bool choosing) {
             const bool sel = k == ui.home_i;
             const float depth = 0.5f + 0.5f * sc.cos;                // 1 = front
             const bool empty = k == 3 && ctx.potions <= 0;        // no potions left: greyed
+            const bool locked = k == 1 && fire_locked(ctx);       // slice 3D-5: Fire not learned yet - greyed + lock
             uint32_t col = sel ? 0xFFFFFFFFu : with_alpha(0xFFC0C0C0u, 0.45f + 0.4f * depth);
-            if (empty) col = with_alpha(0xFF606060u, sel ? 0.9f : 0.5f);
+            if (empty || locked) col = with_alpha(0xFF606060u, sel ? 0.9f : 0.5f);
             icon_draw_tint((Icon)RING_ICON[k], sx, sy + (sel ? bob : 0.0f), sel ? 48.0f : 32.0f, col, sel ? 5.1f : 5.0f);
+            if (locked) text_icon_draw(TI_LOCK, sx + (sel ? 12.0f : 8.0f), sy + (sel ? bob : 0.0f) + (sel ? 12.0f : 8.0f), 1.0f,
+                                       sel ? 0xFFFFFFFFu : with_alpha(0xFFFFFFFFu, 0.45f + 0.4f * depth), sel ? 5.15f : 5.05f);
             if (k == 3 && sel) {
                 char n[8];
                 snprintf(n, sizeof n, "X%d", ctx.potions);
@@ -411,7 +406,8 @@ static void draw_hud(BattleCtx& ctx, const Camera& cam, bool choosing) {
             }
         }
         float sx, sy;
-        if (project(cam, view_head(*hv) + v3(0, 0.35f, 0), &sx, &sy)) draw_text_outline(sx, sy - 24, RING_NAME[ui.home_i], 2, 0xFFFFCD75, 5.2f);
+        if (project(cam, view_head(*hv) + v3(0, 0.35f, 0), &sx, &sy))
+            draw_text_outline(sx, sy - 24, RING_NAME[ui.home_i], 2, (ui.home_i == 1 && fire_locked(ctx)) ? 0xFF909090 : 0xFFFFCD75, 5.2f);
         static const UiPrompt P[] = { { ICON_PAD_A, ICON_COUNT, "SELECT" }, { ICON_PAD_LEFT, ICON_PAD_RIGHT, "CHOOSE" },
                                       { ICON_PAD_Y, ICON_COUNT, "GUARD" } };
         ui_draw_prompts(P, 3);
@@ -495,7 +491,7 @@ void battle3d_draw(BattleCtx& ctx) {
     if (choosing) {
         if (ctx.ui.state == UiState::Target && target_vi >= 0) {
             rings[nr++] = ring(g_b3.views[target_vi].pos, 0.95f * g_b3.views[target_vi].scale / 0.8f, FX_RUNE, 0xFFFFC850, spin);
-        } else if (ctx.ui.state == UiState::TargetAll || (ctx.ui.state == UiState::Home && ctx.ui.home_i == 1)) {
+        } else if (ctx.ui.state == UiState::TargetAll || (ctx.ui.state == UiState::Home && ctx.ui.home_i == 1 && !fire_locked(ctx))) {
             const bool confirm = ctx.ui.state == UiState::TargetAll;
             for (Actor* e : enemies) {
                 const View* ev = view_of(e);

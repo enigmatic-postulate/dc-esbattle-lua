@@ -1,0 +1,59 @@
+# Route 4: talk to everyone twice at every stage, then the Warden. Answers are queued before the talk they are for.
+# S0
+choose cancel
+talk wren                       # "Not now."
+choose cancel
+talk wren
+expect stage=0 skill_fire=0
+talk brom                       # first talk: the potions
+expect potions=3 talked_brom=1
+choose cancel
+talk brom                       # "Later."
+choose 0
+talk wren                       # accept -> S1
+expect stage=1 skill_fire=1 cp=1
+# S1
+talk wren
+talk wren
+expect stage=1
+choose cancel
+talk brom
+choose cancel
+talk brom
+chase slime_a
+expect stage=1 patrol_a=1
+talk wren
+talk wren
+choose cancel
+talk brom
+choose cancel
+talk brom
+chase slime_b
+# S2
+expect stage=2 marker:wren=!
+choose cancel
+talk brom
+choose cancel
+talk brom
+talk wren                       # the report -> S3
+expect stage=3 max_hp=30 has_token=1
+# S3
+talk wren
+talk wren
+choose 0
+talk brom                       # rest + the refill
+expect brom_refill=1 potions=3 cp=9
+choose 0
+talk brom                       # rest, no second refill
+expect brom_refill=1 potions=3 cp=9
+policy boss:good:1
+chase warden
+# S6
+expect stage=6 warden_down=1
+talk wren
+talk wren
+choose cancel
+talk brom
+choose cancel
+talk brom
+expect stage=6 max_hp=30 patrol_a=1 patrol_b=1 skill_fire=1 has_token=1 warden_down=1 talked_brom=1 brom_refill=1

@@ -1,0 +1,7 @@
+# tools/dmf - FBX -> DMF converter. Python 3.10+.
+#   python3 -m venv .venv && .venv/bin/pip install -r tools/dmf/requirements.txt
+numpy>=1.24
+pillow>=9
+assimp-py==1.2.0        # KayKit character meshes, skin weights, bind pose (bundles libassimp)
+ufbx==0.0.5             # Mixamo animation evaluation (assimp cannot open FBX 7.7 anim-only files)
+meshoptimizer==0.2.30a0 # simplification, strip-cache order, stripify (builds from sdist, needs a C++ compiler)

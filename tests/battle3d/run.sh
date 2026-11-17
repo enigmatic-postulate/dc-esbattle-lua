@@ -98,26 +98,26 @@ if cmp -s "$W/hold.log" "$W/hold--bot-hold-a.log" && [ "$(cat "$W/hold--bot-hold
   ok "holding A: the same battle turn for turn in $(cat "$W/hold--bot-hold-a.n") ticks instead of $(cat "$W/hold.n")"
 else bad "hold A (2x)" "ticks $(cat "$W/hold.n") -> $(cat "$W/hold--bot-hold-a.n")"; fi
 
-echo "== game flow: field -> 3D battle -> field, the Warden wakes after both patrols, the boss fight, game over"
+echo "== game flow: field -> 3D battle -> field, the Warden appears with Wren's token, the boss fight, game over"
 python3 -c "print('\n'.join(['0.0166667 00'] * 40000))" > "$W/idle.in"
-# the north-west patrol, then the road patrol, then the Warden at the east end of the road
-TMO=300 T ./build/battle_trace_f32 "$W/idle.in" "$W/flow.trace" --state-only --bot-battles "boss:good:1" \
-  --walk-to "17.5,15.5;12.5,14.8;17.0,14.5;20.5,14.5;23.0,14.5;26.0,14.5;29.0,14.5;33.5,14.5" --max-ticks 40000 > /dev/null
+# slice 3D-5: the story driver (platform/host/story.cpp) walks the route; the bot plays the three battles
+TMO=300 T ./build/battle_trace_f32 - "$W/flow.trace" --state-only --story --route tests/battle3d/flow.route --bot-battles "boss:good:1" --max-ticks 40000 > /dev/null
 last=$(grep "^X mode=" "$W/flow.trace" | tail -1)
-battles=$(grep -c "mode=to_battle" <(grep "^X mode=" "$W/flow.trace" | awk '{print $2}' | uniq))
+battles=$(grep -c " battle$" <(grep "^N " "$W/flow.trace"))
 if echo "$last" | grep -q "mode=field" && echo "$last" | grep -q "slime_a:[0-9,:]*:gone" && echo "$last" | grep -q "slime_b:[0-9,:]*:gone" \
    && echo "$last" | grep -q "warden:[0-9,:]*:gone" && [ "$battles" = 3 ]; then
   ok "three battles won from the field; both patrols and the Warden gone; back on the field ($(echo "$last" | grep -o 'hp=[0-9/]*'))"
 else bad "game flow" "$(echo "$last" | cut -c1-300) battles=$battles"; fi
-grep "^X mode=" "$W/flow.trace" | awk '{print $2}' | uniq | tr '\n' ' ' > "$W/flow_modes.txt"
-[ "$(grep -o "mode=to_battle mode=to_field mode=field" "$W/flow_modes.txt" | wc -l)" = 3 ] && \
-  ok "transitions field -> to_battle -> (battle) -> to_field -> field, three times" || bad "mode sequence" "$(cat "$W/flow_modes.txt")"
+grep "^N " "$W/flow.trace" | awk '{print $3}' | tr '\n' ' ' > "$W/flow_modes.txt"
+# after a won battle the field returns, or the after_battle script's dialog over it (slice 3D-5)
+[ "$(grep -oE "to_battle battle to_field (field|dialog)" "$W/flow_modes.txt" | wc -l)" = 3 ] && ! grep -q game_over "$W/flow_modes.txt" && \
+  ok "transitions field -> to_battle -> battle -> to_field -> field (or the after_battle dialog), three times" || bad "mode sequence" "$(cat "$W/flow_modes.txt")"
 # a lost battle: game over, then A restores every entity (the Warden dormant again)
 TMO=300 T ./build/battle_trace_f32 "$W/idle.in" "$W/lose.trace" --state-only --bot-battles "guard" --rules legacy \
-  --walk-to "17.5,15.5;12.5,14.8" --max-ticks 6000 > /dev/null
+  --walk-to "20.5,15.6;27.5,15.6" --max-ticks 6000 > /dev/null
 if grep -q "mode=game_over" "$W/lose.trace"; then ok "a lost battle ends in the game-over screen"; else bad "no game over after a lost battle"; fi
 
-echo "== frame budget and determinism of the 3D battles (village: <= 14,000 submitted vertices, the field's worst)"
+echo "== frame budget and determinism of the 3D battles (<= 18,000 submitted vertices: docs/SLICE_VS1_ART.md, Budgets)"
 budget_fail=""
 for run in "test_slimes cycle:AFG" "test_slimes fire" "slimes_2 random:3" "guard_duel cycle:FGGA" "warden boss:good:2" "warden boss:naive:5"; do
   set -- $run
@@ -127,13 +127,15 @@ for run in "test_slimes cycle:AFG" "test_slimes fire" "slimes_2 random:3" "guard
   r=$(awk '/^B /{for(i=2;i<=NF;i++){split($i,a,"="); v[a[1]]=a[2]} n++; if(v["out"]>m)m=v["out"]; if(v["arena"]>ma)ma=v["arena"]; if(v["parts"]>mp)mp=v["parts"]; if(v["drops"]>md)md=v["drops"]} END{print m, ma, mp, md+0, n}' "$W/b.trace")
   set -- $r
   echo "       $run: worst frame $1 vertices, arena peak $2, particles peak $3, dropped batches $4 ($5 frames)"
-  [ "$1" -le 14000 ] || budget_fail="$budget_fail over-budget($run:$1)"
+  [ "$1" -le 18000 ] || budget_fail="$budget_fail over-budget($run:$1)"
   [ "$4" = 0 ] || budget_fail="$budget_fail drops($run)"
 done
 [ -z "$budget_fail" ] && ok "every 3D battle frame within budget, no dropped batches, float == double (tick-exact)" || bad "budget/determinism:$budget_fail"
 
 echo "== view-culled arena props draw the same pixels (battles not used to build them)"
 RD="$W/rd_orig"; rm -rf "$RD"; cp -r romdisk "$RD"
+# the arena houses' source models (pre-VS1 field houses, assets/arena_src/; the field's house_*_r0 are VS1's now)
+cp assets/arena_src/house_plaster_r0.dmf assets/arena_src/house_stone_r0.dmf "$RD/models/"
 sed -i 's/^prop house_plaster_b /prop house_plaster_r0/; s/^prop house_stone_b  /prop house_stone_r0/' "$RD/arenas/village.txt"
 EVERY=$([ "$Q" = 1 ] && echo 97 || echo 29)
 for run in "test_slimes random:11" "slimes_2 cycle:GFA" "guard_duel random:12"; do
@@ -146,14 +148,14 @@ if out=$(python3 tests/battle3d/compare_dumps.py "$W" "$RD" romdisk); then ok "$
 
 echo "== sanitizers (ASan + UBSan) over full battles"
 g++ -std=gnu++17 -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined $SHZ src/*.cpp platform/host/host_engine.cpp \
-    platform/host/trace_main.cpp platform/host/battle_bot.cpp build/sh4zam-host/libsh4zam.a -o "$W/trace_asan" 2>"$W/asan_build.err" || bad "asan build" "$(cat "$W/asan_build.err")"
+    platform/host/trace_main.cpp platform/host/battle_bot.cpp platform/host/story.cpp build/sh4zam-host/libsh4zam.a -o "$W/trace_asan" 2>"$W/asan_build.err" || bad "asan build" "$(cat "$W/asan_build.err")"
 asan_bad=""
 for run in "test_slimes cycle:AFG" "warden boss:good:4" "guard_duel random:2"; do
   set -- $run
   ASAN_OPTIONS=detect_leaks=0 T "$W/trace_asan" - /dev/null --battle-test "$1" --state-only --bot "$2" --bot-wait 100 > "$W/asan.out" 2>&1 || asan_bad="$asan_bad $1"
   grep -q "runtime error\|ERROR: AddressSanitizer" "$W/asan.out" && asan_bad="$asan_bad $1($(grep -m1 'runtime error\|AddressSanitizer' "$W/asan.out" | cut -c1-120))"
 done
-ASAN_OPTIONS=detect_leaks=0 T "$W/trace_asan" "$W/idle.in" /dev/null --state-only --bot-battles cycle:AFG --walk-to "17.5,15.5;12.5,14.8" --max-ticks 4000 > "$W/asan.out" 2>&1 || asan_bad="$asan_bad flow"
+ASAN_OPTIONS=detect_leaks=0 T "$W/trace_asan" "$W/idle.in" /dev/null --state-only --bot-battles cycle:AFG --walk-to "20.5,15.6;27.5,15.6" --max-ticks 4000 > "$W/asan.out" 2>&1 || asan_bad="$asan_bad flow"
 [ -z "$asan_bad" ] && ok "ASan/UBSan clean: village and boss battles, field flow" || bad "sanitizers:$asan_bad"
 
 echo "== assets reproducible"
@@ -166,10 +168,10 @@ git checkout -- docs/battle3d/fx_atlas.png 2>/dev/null
 [ $same = 1 ] && ok "make_fx.py and make_props.py reproduce the committed files byte for byte" || bad "procedural assets differ from the generators"
 if [ -n "${BPY:-}" ]; then
   snap2="$W/bpy_assets"; rm -rf "$snap2"; mkdir -p "$snap2"
-  cp romdisk/anims/rig_medium.dma romdisk/models/skel_rogue.dmf romdisk/models/w_*.dmf "$snap2/"
+  cp romdisk/anims/rig_medium.dma assets/vs1_art/bodies/skel_rogue.dmf romdisk/models/w_*.dmf "$snap2/"
   BPY="$BPY" bash tools/battle3d/build_assets.sh > /dev/null 2>&1
-  same=1; for f in "$snap2"/*; do g=$(ls romdisk/anims/$(basename "$f") romdisk/models/$(basename "$f") 2>/dev/null | head -1); cmp -s "$f" "$g" || same=0; done
-  [ $same = 1 ] && ok "Blender-built assets (animation library, Rogue, weapons) rebuild byte for byte" || bad "Blender-built assets differ"
+  same=1; for f in "$snap2"/*; do g=$(ls romdisk/anims/$(basename "$f") assets/vs1_art/bodies/$(basename "$f") romdisk/models/$(basename "$f") 2>/dev/null | head -1); cmp -s "$f" "$g" || same=0; done
+  [ $same = 1 ] && ok "Blender-built assets (animation library, the Rogue's body, weapons) rebuild byte for byte" || bad "Blender-built assets differ"
   git checkout -- tools/battle3d/reports 2>/dev/null
   if "$BPY" tools/battle3d/build_anims.py --check 2>/dev/null | grep -q "OK"; then ok "clip convention check against the shipped field clips"; else bad "clip convention check"; fi
 fi

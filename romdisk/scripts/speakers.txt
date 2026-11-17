@@ -1,0 +1,6 @@
+# Speakers (GDD 7.4, slice 3D-5 AD8): id "Name" plate colour (RRGGBB) portrait base.
+# Portraits: romdisk/portraits/<base>_<variant>.dtx, variants neutral | happy | worried
+# (tools/dialog/make_portraits.py). 'sys' is not a speaker: sys: pages have no portrait and no plate.
+@speaker rowan "Rowan" 3A6EA8 rowan
+@speaker wren  "Wren"  6038A0 wren
+@speaker brom  "Brom"  A0502A brom

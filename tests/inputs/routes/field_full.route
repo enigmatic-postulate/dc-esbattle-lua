@@ -1,0 +1,7 @@
+# tests/inputs/field_full.in (regenerated in slice 3D-5): win the north patrol, then lose to the squad and retry.
+policy cycle:FFA
+chase slime_a
+policy guard
+chase slime_b
+wait 30
+goto 6 10

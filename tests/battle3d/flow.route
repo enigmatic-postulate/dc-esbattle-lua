@@ -1,0 +1,13 @@
+# The game flow check (tests/battle3d/run.sh) since slice 3D-5: the Warden appears once Wren gives her token,
+# so the route is Wren (accept), the north-west patrol, the road patrol, Wren (the report), Brom (potions, then a
+# rest and the refill: the Warden is not winnable without potions, docs/NEXT_SLICE_DIALOG.md finding 5), the Warden.
+choose 0
+talk wren
+chase slime_a
+chase slime_b
+talk wren
+talk brom
+choose 0
+talk brom
+policy boss:good:1
+chase warden

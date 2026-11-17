@@ -8,5 +8,8 @@ void input_reset();                 // forget history (no edges on the next tick
 bool input_held(eng::Key k);
 bool input_pressed(eng::Key k);     // went down this tick
 bool input_released(eng::Key k);    // went up this tick
+// Uses up this tick's press of k: input_pressed(k) is false for the rest of the tick (slice 3D-5,
+// GDD 4: the A that closes a dialog never also starts something else on the same tick).
+void input_consume(eng::Key k);
 int  input_stick(eng::Axis a);      // analog stick this tick, -128..127 (sampled with the buttons)
 }

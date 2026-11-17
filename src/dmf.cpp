@@ -15,7 +15,7 @@ static_assert(sizeof(TexHeader) == 32, "dmf texture header layout");
 static_assert(sizeof(Material) == 64, "dmf material layout");
 
 // Model files live here for the whole session (load-time only; no per-frame allocation).
-const int ARENA_BYTES = 1024 * 1024;     // village: 541 KiB (hero, 2 skeletons, props, 4 house variants) + room for the all-yaw house fallbacks
+const int ARENA_BYTES = 1792 * 1024;     // VS1 art (docs/SLICE_VS1_ART.md): ~1.45 MiB in use (battle 675 KiB incl. the VS1-head characters + the field's houses, boulders, wagon, NPCs)
 alignas(32) static uint8_t g_arena[ARENA_BYTES];
 static int g_arena_used = 0;
 
@@ -76,6 +76,7 @@ bool parse(const void* data, int size_i, Model* out, char* err, int errlen) {
     } else if (h->flags & DMF_SKINNED) {
         return fail(err, errlen, "SKINNED flag without bones");
     }
+    if ((h->flags & DMF_PRELIT) && h->num_bones) return fail(err, errlen, "PRELIT on a skinned model");
     // skin groups tile the vertex array
     uint32_t expect = 0;
     for (int g = 0; g < h->num_groups; ++g) {

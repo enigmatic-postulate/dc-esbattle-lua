@@ -23,5 +23,8 @@ int          models_get(const char* name, bool upload_texture = true);
 LoadedModel& models_at(int i);
 int          models_count();
 void         models_make_faded(LoadedModel& lm);   // builds lm.faded once
+// The vertex range of a character's untextured batch (the skeletons' glowing eyes: VS1 draws them unlit, in their
+// vertex colour). false (count 0) if the model has none. The eye vertices are contiguous (tools/vs1art).
+bool         models_glow_range(const dmf::Model& m, int* first, int* count);
 
 }

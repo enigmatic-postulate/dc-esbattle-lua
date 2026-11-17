@@ -1,5 +1,9 @@
 # Next vertical slice (3D-5): "Talk to Wren": dialog, portraits and the village quest
 
+> **Implemented:** see `docs/SLICE_DIALOG.md` for what was built, measured and decided (and where it differs from
+> this plan). **Then reconciled with the VS1 art:** `docs/SLICE_VS1_ART.md` (the VS1 village is the GDD's 40x30 map,
+> so AD1 is undone: Wren at (6,17), Brom at (21,10)). The plan below is kept as written.
+>
 > **Status:** plan, decisions D1–D7 taken (§13), D8–D11 on the recommendations. Slice 3D-4 runs on
 > Dreamcast hardware and Flycast (stage 0.1 done). Builds on slice 3D-4 (`docs/SLICE_3D_BATTLE.md`). GDD: `docs/GDD_Horizontal_Slice.pdf`
 > (v1.0). Section numbers such as "GDD 7.1" refer to that document.

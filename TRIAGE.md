@@ -82,7 +82,7 @@ The field map loads from `/rd/maps/test_field.txt`. A broken map shows **MAP LOA
 | A house has a hole or a missing piece from some camera position | the view culling removed a face it should not have. Run `tests/slice3d/check_views.py` on the `--reference` output of `build_village.py`, and send the hero position (the `V cam=` line of a host `--view` trace) |
 | `dmf: shared texture /rd/tex/x.png failed to load` | a texture referenced by a model is missing from `romdisk/tex/`: rebuild with `tools/dmf/build_models.sh` |
 | `material limit reached` | more than 128 PVR materials (the village uses ~100: houses x LOD x faded copies) |
-| `3D: arena peak A/16384` | the per-frame vertex arena; the village tour peaks at ~13.9k. When it is full, props are dropped first (they draw last), never the hero |
+| `3D: arena peak A/20480` | the per-frame vertex arena (20,480 since slice 3D-5; it was 16,384 and the village already peaked at 15.8k). The village tour peaks at ~16k. When it is full, props are dropped first (they draw last), never the hero |
 | `PVR vtx buffer peak B` | TA vertex buffer use. This build asks for 1 MiB (`pvr_init` in `main()`, otherwise identical to `pvr_init_defaults`). If B approaches 1 MiB, polygons are lost: reduce the props in view |
 | Everything renders but the screen is black/garbage right at boot | `pvr_init` with the custom parameters is the only change to the PVR init path: `make clean && make PVR_DEFAULTS=1` builds with `pvr_init_defaults()` to bisect (the village then needs the vertex buffer to stay under 512 KiB) |
 | A house looks inside-out while faded | the faded (translucent) house materials cull back faces, the only culled materials in the build. Swap `PVR_CULLING_CW` / `PVR_CULLING_CCW` in `material_create`, or remove `MAT_CULL` in `make_faded` (`src/field3d.cpp`) |
@@ -186,5 +186,51 @@ Serial lines (always on, from `dbg_print` / `boot_log`):
 | Glows, sparks, fire and the selection rings are dark or opaque squares | additive blending not applied (`MAT_ADDITIVE`) | `material_create` in `platform/kos/main.cpp` sets `cxt.blend.src = PVR_BLEND_SRCALPHA; cxt.blend.dst = PVR_BLEND_ONE` on a TR material. Check the KOS version's `pvr_poly_cxt_t`; as a stopgap drop `MAT_ADDITIVE` from `g_fx_add` in `battle3d_draw.cpp` (plain alpha blending, dimmer glows) |
 | Skeletons flash as solid white silhouettes for long | the hit flash (an untextured white copy, 2 frames) stuck | it lasts `flash` ticks (`battle3d.cpp` `impact()`); host-render the frames around the hit |
 | Parts of the village houses missing in the battle | the view-culled `house_*_b.dmf` don't cover a camera the game now uses | rebuild them (`VIEW_CULL=1 tools/battle3d/build_assets.sh`), or point `romdisk/arenas/village.txt` back at `house_*_r0` |
-| `drops > 0` in the DIAG frame report during battles | the vertex arena (16,384) is full | the worst battle frame is 13.9k on the host; compare the `B` lines' `out=` (`tests/battle3d/run.sh` budget check) |
+| `drops > 0` in the DIAG frame report during battles | the vertex arena (20,480 since slice 3D-5) is full | the worst battle frame is 13.9k on the host; compare the `B` lines' `out=` (`tests/battle3d/run.sh` budget check) |
 | Frame rate below 60 in battle | CPU over budget | the SH4 build measured 0.98 M instructions median, 1.34 M worst (`tests/battle3d/sh4_budget.sh`), as the field's; `DIAG=1`'s `worst CPU frame` should stay below ~9 ms. Otherwise send the DIAG log with the battle it came from |
+
+# Dialog, portraits and the quest (slice 3D-5): what to look at if they misbehave
+
+Boot adds 17 `FOUND:` lines (`/rd/fonts/dialog.fnt`, `dialog.tex`, `/rd/scripts/village.txt`, `speakers.txt`,
+`/rd/models/wren.dmf`, `brom.dmf`, 9 `/rd/portraits/*.dtx`). Every symptom below can be reproduced on the host first:
+`./build/battle_trace_f32 - out.trace --state-only --route <route>` with a route of `talk` / `chase` / `choose` steps
+(`platform/host/story.cpp`); the trace's `G` lines show the dialog UI tick by tick, `Q` lines the quest state.
+
+| Symptom | Likely cause | Next step |
+|---|---|---|
+| **SCRIPT ERROR** instead of the field | the village script or speakers.txt does not compile; the serial log has `script: village.txt line N: <reason>` | `python3 tools/dialog/lint.py` prints the same error (and more) on the host; fix the line |
+| **MAP LOAD ERROR** after editing the map | a `npc` without `talk <script>`, an unknown look (`slime guard mage smith`), a bad `if` condition | the `map error line N` log line |
+| Lint: "page does not fit the box" | the page wraps to more than 3 lines of 420 px with the real font | split it into two pages (the words can stay) or reword |
+| Lint: "is read but never set" / "unreachable" / "dead end" / "never blocks" | a flag nothing sets; a page after an `end`; a loop with no way out; a loop of instant commands | the line number given; the `--dump` output shows the compiled jumps |
+| No **A Talk** prompt next to an NPC | not facing it within 60 degrees, farther than 1.3 tiles, the NPC hidden by its `if`, or another NPC nearer | walk straight at it; `battle_trace --probe-talk` lists the target for every position and facing (`tests/dialog/check_talk.py` is the rule) |
+| A press does nothing at the prompt | the A was held from before (a press edge is needed: GDD 4), or the script ended at once (no page: e.g. a talk script that only sets flags) | release and press; check the script's first branch with the lint's `--dump` |
+| **Dialog stuck** (box up, A does nothing) | a `wait` / `fade` still counting (the box is hidden then), or a choice waiting (A needs a fresh press after it opened) | the `G` lines: `op=` and `pc=` show what the VM waits on; a VM error logs `script: ... script stopped` and closes the dialog |
+| The dialog never closes / loops | a script loop; the VM stops a run of 512 commands without a page ("a loop with no exit") | the lint reports loops before they ship |
+| **Portraits scrambled** (stripes, blocks) on hardware | the portrait cache is twiddled at load (`src/portrait.cpp`, KOS `TWIDOUT` order) and uploaded with `pvr_txr_load`; a mismatch scrambles it | `make clean && make PORTRAIT_KOS_TWIDDLE=1`: KOS twiddles each upload itself (the path every other texture takes; slower). Report which build looked right |
+| Portrait black / missing | its `.dtx` is missing or not 128x128 RGB565 (`portrait: ... missing` at boot) | `tools/dialog/build_assets.sh`; the lint checks every speaker's three files |
+| A portrait flickers for 2 frames on an expression change | expected: a slot on screen is hidden 2 frames before it is rewritten (the PVR renders the previous frame while a tick runs) | - |
+| Fire greyed with a lock in battle | Fire is learned from Wren (accepting her request, or her report if the patrols were beaten first) | `Q` lines: `flags=skill_fire`; `--rules legacy` / `--skills 1` unlock it in tests |
+| The Warden never appears | he appears with Wren's token (`if has_token`): report both patrols to her | `Q` lines: `has_token` |
+| GAME OVER -> A restarts somewhere else than expected | it restores the **last checkpoint**: new game (C0), accepting Wren (C1), her report (C2), or Brom's rest | `Q` lines: `cp=<id>@<x>,<y>`; `tests/dialog/check_checkpoints.py` |
+| The pad overlay (squares top left) is gone | since slice 3D-5 only in `make DIAG=1` or `make INPUT_OVERLAY=1` builds (it covered the objective HUD) | - |
+| Frame drops in a dialog | the two-shot sees more props than the field camera; the DIAG report's worst CPU frame at a dialog vs the field's | `SH4=1 tests/dialog/run.sh` measures it under qemu; `field3d_tune dlg_dist` / `dlg_pitch` |
+
+# The VS1 art (village, characters): what to look at if it misbehaves
+
+[docs/SLICE_VS1_ART.md](docs/SLICE_VS1_ART.md). Boot checks three more files (`/rd/models/house_stone_r0.dmf`,
+`wagon_r0.dmf`, `/rd/tex/glass.png`). The VS1 village is 40x30 with no tile walls: its edges block by the map bounds.
+
+| Symptom | Likely cause | Next step |
+|---|---|---|
+| `dmf: ... rejected: PRELIT on a skinned model` | a character file was written with the PRELIT flag | rebuild with `tools/vs1art/build_chars.sh` (only the props are PRELIT) |
+| `dmf: cannot read ... (larger than the N free arena bytes)` at boot | the model arena (1,792 KiB; the game uses ~1,487 KiB) is full: a model was added or grew | `ARENA_BYTES` in `src/dmf.cpp`; the `field3d: ... KiB model arena` line shows the use |
+| Houses black or untextured, windows grey | a shared texture failed (`dmf: shared texture /rd/tex/x.png failed to load`) | `python3 tools/vs1art/import_props.py` rewrites `romdisk/tex/` and the props (`--check` compares) |
+| Houses lit wrongly (flat grey, too dark) | the PRELIT colours were replaced by runtime lighting of zero normals | `r3d::prelight` must copy the vertex colours for `DMF_PRELIT` models; host-render a frame (`--dump`, `tools/render_frame.py`) |
+| The ground is one flat colour / shows tile cells / looks like VS1's pale mint and sand | the painted ground (`/rd/maps/village.gnd`, docs/GROUND_ART.md) did not load: a `field3d: ... is not a GND1 VQ ground for this map` line (the map's size changed: re-run `tools/ground/paint_ground.py`), or `texture_create_vq` failed | the generated VS1 ground is the fallback; `tests/vs1art/check_gnd.py` / `check_ground.py` on a host dump check each bit for bit |
+| The ground shows **scrambled 2x2 blocks, stripes or noise** on hardware (fine on the host) | the PVR reads the VQ layout (codebook texel order, index twiddling) differently than `eng::vq_decode` assumes | `make clean && make GROUND_NO_VQ=1`: the same picture decoded at boot and uploaded as plain RGB565 (512 KiB VRAM). Report which build looked right |
+| Ground details in the wrong places after editing the map (a shadow with no prop, a road under a house) | the `.gnd` is painted from the map and the props: it is stale | `python3 tools/ground/paint_ground.py` (`--check` tells if it is stale; `tests/vs1art/run.sh` runs it) |
+| A dark teal band at the map's side | the outer ground beyond the map (VS1's colour); the camera clamp keeps it to a sliver at the gate and the east end | `field3d_tune cam_clamp_side` (4.5) |
+| A prop under the camera flickers or has holes (south houses) | the near-plane path (strip runs of in-front triangles, clipped ones one by one) | `--tune near_strips=0` (host) switches back to the former per-triangle path; `tests/vs1art/run.sh` checks they draw the same pixels |
+| Characters: a gap at the neck, a floating head | head (VS1) and body (ours) skinned with different bind poses | `python3 tests/vs1art/check_chars.py` (same skeleton, posed heads compared); rebuild with `tools/vs1art/build_chars.sh` |
+| The skeletons' eyes dark instead of glowing cyan | the eye vertices are lit instead of taking their vertex colour | `models_glow_range()` finds them as the untextured batch's vertex range; both `field3d.cpp bake_look` and `battle3d_draw.cpp bake_slice` overwrite them unlit |
+| Frame rate below 60 near the road patrol or in its battle | the VS1 heads add ~550-980 vertices per character (the battle's overview of the road squad is the costliest frame, ~17.4k) | per model, `cp assets/vs1_art/bodies/<name>.dmf romdisk/models/` restores the pre-VS1 character exactly; `tools/vs1art/sweep_map.py` maps the field cost per tile |

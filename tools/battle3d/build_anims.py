@@ -68,6 +68,8 @@ CLIPS = [
     ('skel_rise',   'Special',          'Skeletons_Awaken_Floor',      False, None,    None),
     ('skel_death',  'Special',          'Skeletons_Death',             False, 'death', None),
     ('skel_taunt',  'Special',          'Skeletons_Taunt',             False, None,    None),
+    # slice 3D-5: the field NPCs (Wren, Brom) walk on the shared library (appended: earlier indices unchanged)
+    ('walk',        'MovementBasic',    'Walking_A',                   True,  None,    None),
 ]
 
 PACK = 'Rig_Medium_%s.fbx'

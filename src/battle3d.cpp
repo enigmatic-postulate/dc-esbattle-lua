@@ -1016,7 +1016,9 @@ void battle3d_init() {
     if (g_b3.inited) return;
     g_b3.inited = true;
     eng::boot_log("battle3d: animation library");
-    g_b3.lib_ok = anim::load("/rd/anims/rig_medium.dma", &g_b3.lib);
+    const anim::Library* lib = anim::shared_library();    // shared with the field's NPCs (slice 3D-5)
+    g_b3.lib_ok = lib != nullptr;
+    if (lib) g_b3.lib = *lib;
     eng::boot_log("battle3d: models");
     for (int k = 0; k < K_COUNT; ++k) {
         KindRuntime& kr = g_b3.kinds[k];

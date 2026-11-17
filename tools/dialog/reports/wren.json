@@ -1,0 +1,86 @@
+{
+ "source": "Mage.fbx",
+ "budget": 1100,
+ "parts": [
+  {
+   "part": "armleft",
+   "source_tris": 468,
+   "after_dissolve": 348,
+   "tris": 76,
+   "target": 77,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "armright",
+   "source_tris": 468,
+   "after_dissolve": 352,
+   "tris": 76,
+   "target": 77,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "body",
+   "source_tris": 1230,
+   "after_dissolve": 1226,
+   "tris": 203,
+   "target": 203,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "cape",
+   "source_tris": 84,
+   "after_dissolve": 76,
+   "tris": 14,
+   "target": 14,
+   "glow": false,
+   "double_sided": true
+  },
+  {
+   "part": "hat",
+   "source_tris": 396,
+   "after_dissolve": 396,
+   "tris": 64,
+   "target": 65,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "head",
+   "source_tris": 2162,
+   "after_dissolve": 2144,
+   "tris": 357,
+   "target": 357,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "legleft",
+   "source_tris": 930,
+   "after_dissolve": 852,
+   "tris": 152,
+   "target": 153,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "legright",
+   "source_tris": 930,
+   "after_dissolve": 852,
+   "tris": 152,
+   "target": 153,
+   "glow": false,
+   "double_sided": false
+  }
+ ],
+ "out": "wren.dmf",
+ "tris": 1094,
+ "verts": 1068,
+ "groups": 46,
+ "strips": 355,
+ "verts_per_tri": 1.649,
+ "bytes": 49504,
+ "source_tris": 6668
+}

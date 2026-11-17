@@ -1,0 +1,5 @@
+# tests/inputs/field_win.in (regenerated in slice 3D-5 with the story driver): walk to the north patrol on the test
+# map and win its battle (the sprite battle, legacy rules, as the old suite runs it).
+policy cycle:FFA
+chase slime_a
+wait 60

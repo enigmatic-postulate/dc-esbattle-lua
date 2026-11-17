@@ -27,7 +27,7 @@ static unsigned g_btn = 0;
 static int g_axis[2] = { 0, 0 };
 static unsigned g_rng = 12345;
 
-const int ARENA_VERTS = 16384;
+const int ARENA_VERTS = 20480;   // as the KOS backend (slice 3D-5)
 alignas(32) static eng::Vert3 g_arena[ARENA_VERTS];
 static int g_used = 0, g_open = -1;
 static unsigned g_drawn = 0, g_dropped = 0;
@@ -41,6 +41,7 @@ void gfx_rect_tr(float, float, float, float, uint32_t, float) { g_bench_sink = 5
 bool input_down(Key k) { return (g_btn >> k) & 1u; }
 int  input_axis(Axis a) { return (a == AXIS_X || a == AXIS_Y) ? g_axis[a] : 0; }
 Sprite texture_create(const uint16_t*, int, int, int) { static int n = 100; return ++n; }
+bool texture_update(Sprite, const uint16_t*, bool) { return true; }   // slice 3D-5 (portraits): a 32 KiB copy on KOS, not modelled
 Material material_create(Sprite, int) { static int n = 0; return ++n; }
 Vert3* vtx_begin(int max) {
     if (g_open >= 0 || max <= 0 || g_used + max > ARENA_VERTS) { ++g_dropped; return nullptr; }
@@ -61,7 +62,9 @@ int file_read(const char* path, char* buf, int cap) {
     char p[512]; rd_path(p, sizeof p, path);
     FILE* f = fopen(p, "rb"); if (!f) return -1;
     int n = (int)fread(buf, 1, (size_t)cap, f); fclose(f);
-    if (n >= cap) return -1; buf[n] = 0; return n;
+    if (n >= cap) return -1;
+    buf[n] = 0;
+    return n;
 }
 bool file_exists(const char* path) {
     char p[512]; rd_path(p, sizeof p, path);

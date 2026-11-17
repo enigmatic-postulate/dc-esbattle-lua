@@ -1,0 +1,10 @@
+# Route 6: lose the squad at S1 (the bot only guards), then retry from C1.
+choose 0
+talk wren
+expect stage=1 cp=1
+policy guard
+chase slime_b
+expect mode=field retries=1 stage=1 patrol_b=0 cp=1 hp=20 at_cp=1 visible:slime_b=1
+policy smart
+chase slime_a
+expect patrol_a=1

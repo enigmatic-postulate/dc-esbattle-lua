@@ -53,6 +53,7 @@ PartyState party_default() {
     p.hero_hp = 20; p.hero_hp_max = 20;
     p.hero_stats = Stats{ 6, 2, 2, 6, 99 };
     p.potions = 0;
+    p.skills = SKILLS_ALL;
     return p;
 }
 
