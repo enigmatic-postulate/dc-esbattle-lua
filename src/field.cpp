@@ -86,7 +86,22 @@ static bool parse_int(const char* s, int* out) {
 static uint8_t tile_at(int x, int y) { return g_f.tiles[y * g_f.w + x]; }
 static bool in_bounds(int x, int y) { return x >= 0 && y >= 0 && x < g_f.w && y < g_f.h; }
 bool cell_walkable(int x, int y) {
-    return in_bounds(x, y) && tile_walkable(tile_at(x, y)) && !g_f.solid[y * g_f.w + x];
+    return in_bounds(x, y) && tile_walkable(tile_at(x, y)) && !g_f.solid[y * g_f.w + x] && !g_f.closed[y * g_f.w + x];
+}
+
+// Splits off a trailing " #comment" and an " if <cond>" clause (the rest of the line) into cond (cap bytes).
+static bool split_cond(char* body, char* cond, int cap) {
+    char* hash = strstr(body, " #");
+    if (hash) *hash = 0;
+    cond[0] = 0;
+    char* c = strstr(body, " if ");
+    if (!c) return true;
+    *c = 0;
+    const char* v = c + 4;
+    while (*v == ' ') ++v;
+    if (!*v || (int)strlen(v) >= cap) return false;
+    snprintf(cond, (size_t)cap, "%s", v);
+    return true;
 }
 
 static void walker_place(Walker& w, int x, int y, Dir d, int step_len) {
@@ -183,7 +198,7 @@ bool field_load(const char* path) {
             else { report(line_no, "entity kind must be enemy|npc", tok[1]); return false; }
             bool look_ok;
             e.look = look_by_name(tok[2], &look_ok);
-            if (!look_ok) { report(line_no, "unknown look (slime, guard, mage, smith)", tok[2]); return false; }
+            if (!look_ok) { report(line_no, "unknown look (slime, guard, mage, smith, watch, warden, stone)", tok[2]); return false; }
             e.sheet = sheet_by_name(e.look == ELOOK_SLIME ? "slime" : "guard");
             int x, y;
             if (!parse_int(tok[3], &x) || !parse_int(tok[4], &y)) { report(line_no, "bad entity position", line); return false; }
@@ -213,10 +228,95 @@ bool field_load(const char* path) {
                 } else if (!strcmp(tok[k], "win") && k + 1 < nt && e.kind == EntityKind::Enemy) {
                     copy_token(e.win, tok[k + 1]);
                     k += 2;
+                } else if (!strcmp(tok[k], "asleep") && e.kind == EntityKind::Enemy) {   // slice 3D-6
+                    e.sleeper = true;
+                    ++k;
                 } else { report(line_no, "bad entity clause", tok[k]); return false; }
             }
             e.home_x = x; e.home_y = y;
             if (!g_f.ents.push(e)) { report(line_no, "too many entities", ""); return false; }
+        } else if (strncmp(line, "trigger ", 8) == 0) {
+            // slice 3D-6: trigger <id> <x> <y> <w> <h> <script> [once] [if <cond...>]
+            Trigger t;
+            memset(&t, 0, sizeof t);
+            char body[200], tok[8][16];
+            snprintf(body, sizeof body, "%s", line + 8);
+            if (!split_cond(body, t.cond, sizeof t.cond)) { report(line_no, "bad 'if' condition (1..63 characters)", line); return false; }
+            const int nt = split_tokens(body, tok, 8);
+            if (nt < 6 || nt > 7 || (nt == 7 && strcmp(tok[6], "once"))) { report(line_no, "trigger <id> <x> <y> <w> <h> <script> [once] [if <cond>]", line); return false; }
+            copy_token(t.id, tok[0]);
+            if (!parse_int(tok[1], &t.x) || !parse_int(tok[2], &t.y) || !parse_int(tok[3], &t.w) || !parse_int(tok[4], &t.h) || t.w < 1 || t.h < 1) {
+                report(line_no, "bad trigger rectangle", line); return false;
+            }
+            copy_token(t.script, tok[5]);
+            t.once = nt == 7;
+            if (!have_map || rows_left > 0 || !in_bounds(t.x, t.y) || !in_bounds(t.x + t.w - 1, t.y + t.h - 1)) { report(line_no, "trigger outside the map", line); return false; }
+            if (!g_f.triggers.push(t)) { report(line_no, "too many triggers (8)", ""); return false; }
+        } else if (strncmp(line, "exit ", 5) == 0) {
+            // slice 3D-6: exit <id> <x> <y> <w> <h> <map> <tx> <ty> <dir> [if <cond...>]
+            Exit x;
+            memset(&x, 0, sizeof x);
+            char body[200], tok[10][16];
+            snprintf(body, sizeof body, "%s", line + 5);
+            if (!split_cond(body, x.cond, sizeof x.cond)) { report(line_no, "bad 'if' condition (1..63 characters)", line); return false; }
+            const int nt = split_tokens(body, tok, 10);
+            if (nt != 9) { report(line_no, "exit <id> <x> <y> <w> <h> <map> <tx> <ty> <dir> [if <cond>]", line); return false; }
+            copy_token(x.id, tok[0]);
+            if (!parse_int(tok[1], &x.x) || !parse_int(tok[2], &x.y) || !parse_int(tok[3], &x.w) || !parse_int(tok[4], &x.h) || x.w < 1 || x.h < 1 ||
+                !parse_int(tok[6], &x.tx) || !parse_int(tok[7], &x.ty) || !parse_dir(tok[8], &x.dir)) { report(line_no, "bad exit", line); return false; }
+            copy_token(x.map, tok[5]);
+            x.open = true;
+            if (!have_map || rows_left > 0 || !in_bounds(x.x, x.y) || !in_bounds(x.x + x.w - 1, x.y + x.h - 1)) { report(line_no, "exit outside the map", line); return false; }
+            if (!g_f.exits.push(x)) { report(line_no, "too many exits (4)", ""); return false; }
+        } else if (strncmp(line, "shot ", 5) == 0) {
+            // slice 3D-6: shot <id> <eye x y z> <look x y z> <fov>
+            Shot sh;
+            memset(&sh, 0, sizeof sh);
+            char body[200], tok[10][16];
+            snprintf(body, sizeof body, "%s", line + 5);
+            char* hash = strstr(body, " #");
+            if (hash) *hash = 0;
+            const int nt = split_tokens(body, tok, 10);
+            bool ok = nt == 8;
+            for (int k = 0; k < 3 && ok; ++k) ok = parse_decimal(tok[1 + k], &sh.eye[k]) && parse_decimal(tok[4 + k], &sh.look[k]);
+            ok = ok && parse_decimal(tok[7], &sh.fov) && sh.fov >= 10.0f && sh.fov <= 90.0f;
+            if (!ok) { report(line_no, "shot <id> <eye x y z> <look x y z> <fov 10..90>", line); return false; }
+            copy_token(sh.id, tok[0]);
+            if (!g_f.shots.push(sh)) { report(line_no, "too many shots (12)", ""); return false; }
+        } else if (strncmp(line, "glow ", 5) == 0) {
+            // slice 3D-6: glow <x> <y> <radius> <rrggbb> [ring] [if <cond...>]
+            Glow gl;
+            memset(&gl, 0, sizeof gl);
+            char body[200], tok[6][16];
+            snprintf(body, sizeof body, "%s", line + 5);
+            if (!split_cond(body, gl.cond, sizeof gl.cond)) { report(line_no, "bad 'if' condition (1..63 characters)", line); return false; }
+            const int nt = split_tokens(body, tok, 6);
+            bool ok = (nt == 4 || (nt == 5 && !strcmp(tok[4], "ring"))) && parse_decimal(tok[0], &gl.x) && parse_decimal(tok[1], &gl.z) &&
+                      parse_decimal(tok[2], &gl.r) && gl.r > 0.0f && strlen(tok[3]) == 6;
+            for (int k = 0; ok && k < 6; ++k) {
+                const char c = tok[3][k];
+                const int d = (c >= '0' && c <= '9') ? c - '0' : (c >= 'A' && c <= 'F') ? c - 'A' + 10 : (c >= 'a' && c <= 'f') ? c - 'a' + 10 : -1;
+                ok = d >= 0;
+                gl.rgb = gl.rgb << 4 | (uint32_t)(d < 0 ? 0 : d);
+            }
+            if (!ok) { report(line_no, "glow <x> <y> <radius> <rrggbb> [ring] [if <cond>]", line); return false; }
+            gl.ring = nt == 5;
+            gl.on = gl.cond[0] == 0;
+            if (!g_f.glows.push(gl)) { report(line_no, "too many glows (6)", ""); return false; }
+        } else if (strncmp(line, "trees ", 6) == 0 || strncmp(line, "fences ", 7) == 0) {
+            // slice 3D-6: the models the T tiles and # runs use on this map
+            char tok[3][16];
+            const bool trees = line[0] == 't';
+            if (split_tokens(line + (trees ? 6 : 7), tok, 3) != 1) { report(line_no, "trees <model> | fences <model>", line); return false; }
+            copy_token(trees ? g_f.tree_model : g_f.fence_model, tok[0]);
+        } else if (strncmp(line, "light ", 6) == 0) {
+            // slice 3D-6: light <preset> (romdisk/maps/lights.txt)
+            char body[64], tok[2][16];
+            snprintf(body, sizeof body, "%s", line + 6);
+            char* hash = strstr(body, " #");
+            if (hash) *hash = 0;
+            if (split_tokens(body, tok, 2) != 1) { report(line_no, "light <preset>", line); return false; }
+            copy_token(g_f.light, tok[0]);
         } else {
             report(line_no, "unknown directive", line); return false;
         }
@@ -236,9 +336,13 @@ bool field_load(const char* path) {
             if (!found) { report(0, "'after' names an unknown entity:", e.after[k]); return false; }
         }
     }
+    for (int i = 0; i < g_f.shots.size(); ++i)
+        for (int j = 0; j < i; ++j)
+            if (!strcmp(g_f.shots[i].id, g_f.shots[j].id)) { report(0, "duplicate shot:", g_f.shots[i].id); return false; }
     field_reset();
-    char msg[96];
-    snprintf(msg, sizeof msg, "field_load: ok, %dx%d, %d props, %d entities", g_f.w, g_f.h, g_f.props.size(), g_f.ents.size());
+    char msg[128];
+    snprintf(msg, sizeof msg, "field_load: ok, %dx%d, %d props, %d entities, %d triggers, %d exits, %d shots", g_f.w, g_f.h, g_f.props.size(),
+             g_f.ents.size(), g_f.triggers.size(), g_f.exits.size(), g_f.shots.size());
     eng::boot_log(msg);
     return true;
 }
@@ -281,6 +385,18 @@ static void update_camera() {
     g_f.cam_y = (mh <= 480) ? (mh - 480) / 2 : clampv(py + TILE_PX / 2 - 240, 0, mh - 480);
 }
 
+static Box hero_feet_box();
+static bool rect_overlap_tiles(const Box& b, int x, int y, int w, int h);
+// Triggers and exits fire on entering (an edge): a hero placed inside one (a spawn, an arrival, a retry) must
+// first leave it. Scripted moves are cancelled.
+static void reset_edges() {
+    const Box b = hero_feet_box();
+    for (Trigger& t : g_f.triggers) t.inside = rect_overlap_tiles(b, t.x, t.y, t.w, t.h);
+    for (Exit& x : g_f.exits) x.inside = rect_overlap_tiles(b, x.x, x.y, x.w, x.h);
+    g_f.trigger_hit = g_f.exit_hit = -1;
+    g_f.hero_mv = false;
+}
+
 void field_reset() {
     Hero& h = g_f.hero;
     h.x = g_f.spawn_x * TILE_PX * SUBPX; h.y = g_f.spawn_y * TILE_PX * SUBPX;
@@ -291,9 +407,11 @@ void field_reset() {
         walker_place(e.w, e.home_x, e.home_y, e.home_dir, NPC_STEP_TICKS);
         e.alive = e.n_after == 0; e.dormant = e.n_after > 0; e.ppos = 0; e.psign = 1; e.pwait = PATROL_WAIT;
         e.facing_hero = false;
+        e.asleep = e.sleeper; e.mv_active = false;
     }
     g_f.contact = -1;
     g_f.talk_target = -1;
+    reset_edges();
     update_camera();
 }
 
@@ -307,6 +425,7 @@ void field_restore(int tx, int ty, Dir dir, uint32_t defeated) {
         Entity& e = g_f.ents[i];
         walker_place(e.w, e.home_x, e.home_y, e.home_dir, NPC_STEP_TICKS);
         e.ppos = 0; e.psign = 1; e.pwait = PATROL_WAIT; e.facing_hero = false;
+        e.asleep = e.sleeper; e.mv_active = false;
         e.alive = !((defeated >> i) & 1u) && e.n_after == 0;
         e.dormant = !((defeated >> i) & 1u) && e.n_after > 0;
     }
@@ -320,6 +439,7 @@ void field_restore(int tx, int ty, Dir dir, uint32_t defeated) {
     }
     g_f.contact = -1;
     g_f.talk_target = -1;
+    reset_edges();
     update_camera();
 }
 
@@ -360,7 +480,7 @@ static MoveResult hero_move_axis(int dx, int dy) {
     for (int i = 0; i < g_f.ents.size(); ++i) {
         const Entity& en = g_f.ents[i];
         if (!present(en) || !overlap(b, entity_box(en))) continue;
-        if (en.kind == EntityKind::Enemy) { touch(i); return MOVE_CONTACT; }
+        if (en.kind == EntityKind::Enemy && !en.asleep) { touch(i); return MOVE_CONTACT; }
         if (!overlap(hero_box_at(h.x, h.y), entity_box(en))) return MOVE_BLOCKED;
     }
     h.walk_sub += (nx > h.x ? nx - h.x : h.x - nx) + (ny > h.y ? ny - h.y : h.y - ny);
@@ -458,7 +578,7 @@ void field_set_hidden(int i, bool hidden) { if (i >= 0 && i < g_f.ents.size()) g
 
 static void entity_update(int i) {
     Entity& e = g_f.ents[i];
-    if (!present(e)) return;
+    if (!present(e) || e.asleep) return;
     const bool npc = e.kind == EntityKind::Npc;
     if (npc) {
         // GDD 9.1: an NPC faces the hero within 3 tiles, and holds its patrol meanwhile (which also
@@ -532,11 +652,157 @@ static int talk_target_compute() {
     return best;
 }
 
+// ---------------------------------------------------------------------------- triggers and exits (slice 3D-6)
+static Box hero_feet_box() { return hero_box_at(g_f.hero.x, g_f.hero.y); }
+static bool rect_overlap_tiles(const Box& b, int x, int y, int w, int h) {
+    const int T = TILE_PX * SUBPX;
+    return overlap(b, Box{ x * T, y * T, (x + w) * T, (y + h) * T });
+}
+
+// After the hero moved (the same tick order as NPC contact): the first trigger / open exit whose rectangle the
+// feet box has just entered. Integer boxes: deterministic.
+static void edges_update() {
+    const Box b = hero_feet_box();
+    for (int i = 0; i < g_f.triggers.size(); ++i) {
+        Trigger& t = g_f.triggers[i];
+        const bool in = rect_overlap_tiles(b, t.x, t.y, t.w, t.h);
+        if (in && !t.inside && g_f.trigger_hit < 0 && g_f.contact < 0) g_f.trigger_hit = i;
+        t.inside = in;
+    }
+    for (int i = 0; i < g_f.exits.size(); ++i) {
+        Exit& x = g_f.exits[i];
+        const bool in = rect_overlap_tiles(b, x.x, x.y, x.w, x.h);
+        if (in && !x.inside && x.open && g_f.exit_hit < 0 && g_f.contact < 0 && g_f.trigger_hit < 0) g_f.exit_hit = i;
+        x.inside = in;
+    }
+}
+
+int field_take_trigger() { int t = g_f.trigger_hit; g_f.trigger_hit = -1; return t; }
+int field_take_exit() { int x = g_f.exit_hit; g_f.exit_hit = -1; return x; }
+
+void field_set_exit_open(int i, bool open) {
+    if (i < 0 || i >= g_f.exits.size()) return;
+    Exit& x = g_f.exits[i];
+    x.open = open;
+    for (int y = x.y; y < x.y + x.h; ++y)
+        for (int xx = x.x; xx < x.x + x.w; ++xx) g_f.closed[y * g_f.w + xx] = open ? 0 : 1;
+}
+
+int field_shot_find(const char* id) {
+    for (int i = 0; i < g_f.shots.size(); ++i) if (!strcmp(g_f.shots[i].id, id)) return i;
+    return -1;
+}
+int field_entity_find(const char* id) {
+    for (int i = 0; i < g_f.ents.size(); ++i) if (!strcmp(g_f.ents[i].id, id)) return i;
+    return -1;
+}
+void field_set_asleep(int i, bool asleep) { if (i >= 0 && i < g_f.ents.size()) g_f.ents[i].asleep = asleep; }
+void field_set_glow(int i, bool on) { if (i >= 0 && i < g_f.glows.size()) g_f.glows[i].on = on; }
+
+// ---------------------------------------------------------------------------- cutscene movement (slice 3D-6)
+const int MV_HERO_WALK = 17, MV_HERO_RUN = 26;      // 1/16 px per tick: one tile in ~30 / ~20 ticks
+const int MV_ENT_WALK = 30, MV_ENT_RUN = 18;        // ticks per tile step
+
+static long long isqrt64(long long n) {
+    if (n <= 0) return 0;
+    long long r = 0, bit = 1LL << 62;
+    while (bit > n) bit >>= 2;
+    while (bit) {
+        if (n >= r + bit) { n -= r + bit; r = (r >> 1) + bit; } else { r >>= 1; }
+        bit >>= 2;
+    }
+    return r;
+}
+
+void field_script_move(int actor, int tx, int ty, bool run) {
+    if (actor == 0) {
+        g_f.hero_mv = true;
+        g_f.hero_mv_x = tx * TILE_PX * SUBPX; g_f.hero_mv_y = ty * TILE_PX * SUBPX;
+        g_f.hero_mv_speed = run ? MV_HERO_RUN : MV_HERO_WALK;
+        return;
+    }
+    const int i = actor - 1;
+    if (i < 0 || i >= g_f.ents.size()) return;
+    Entity& e = g_f.ents[i];
+    e.mv_tx = tx; e.mv_ty = ty; e.mv_active = true;
+    e.w.step_len = run ? MV_ENT_RUN : MV_ENT_WALK;
+    e.facing_hero = false;
+}
+
+void field_script_move_rel(int actor, int dx, int dy, bool run) {
+    if (actor == 0) {
+        const Hero& h = g_f.hero;
+        field_script_move(0, 0, 0, run);
+        g_f.hero_mv_x = h.x + dx * TILE_PX * SUBPX; g_f.hero_mv_y = h.y + dy * TILE_PX * SUBPX;
+        return;
+    }
+    const int i = actor - 1;
+    if (i < 0 || i >= g_f.ents.size()) return;
+    const Walker& w = g_f.ents[i].w;
+    field_script_move(actor, (w.moving ? w.nx : w.tx) + dx, (w.moving ? w.ny : w.ty) + dy, run);
+}
+
+void field_script_place(int actor, int tx, int ty, Dir d) {
+    if (actor == 0) {
+        Hero& h = g_f.hero;
+        h.x = tx * TILE_PX * SUBPX; h.y = ty * TILE_PX * SUBPX;
+        h.dir = d; h.moving = false; h.vx = h.vy = 0; h.fx = h.fy = 0;
+        h.face_x = DX[d] * 256; h.face_y = DY[d] * 256;
+        g_f.hero_mv = false;
+        reset_edges();
+        update_camera();
+        return;
+    }
+    const int i = actor - 1;
+    if (i < 0 || i >= g_f.ents.size()) return;
+    Entity& e = g_f.ents[i];
+    walker_place(e.w, tx, ty, d, NPC_STEP_TICKS);
+    e.mv_active = false; e.facing_hero = false;
+}
+
+bool field_script_moving() {
+    if (g_f.hero_mv) return true;
+    for (const Entity& e : g_f.ents) if (e.mv_active) return true;
+    return false;
+}
+
+void field_script_tick() {
+    Hero& h = g_f.hero;
+    h.moving = false; h.vx = h.vy = 0;
+    if (g_f.hero_mv) {
+        const long long dx = g_f.hero_mv_x - h.x, dy = g_f.hero_mv_y - h.y;
+        const long long len = isqrt64(dx * dx + dy * dy);
+        const int sp = g_f.hero_mv_speed;
+        int nx, ny;
+        if (len <= sp) { nx = g_f.hero_mv_x; ny = g_f.hero_mv_y; g_f.hero_mv = false; }
+        else { nx = h.x + (int)(dx * sp / len); ny = h.y + (int)(dy * sp / len); }
+        if (len > 0) {
+            // the facing (and the view's yaw) follow the motion: the same scale as the stick's velocity
+            h.vx = (int)(dx * sp * 256 / (len > 0 ? len : 1)); h.vy = (int)(dy * sp * 256 / (len > 0 ? len : 1));
+            h.face_x = h.vx; h.face_y = h.vy;
+            h.dir = dir_toward((int)dx, (int)dy);
+        }
+        h.walk_sub += (nx > h.x ? nx - h.x : h.x - nx) + (ny > h.y ? ny - h.y : h.y - ny);
+        h.moving = nx != h.x || ny != h.y;
+        h.x = nx; h.y = ny;
+        if (!g_f.hero_mv) { h.vx = h.vy = 0; }
+    }
+    for (Entity& e : g_f.ents) {
+        if (!e.mv_active) continue;
+        if (e.w.moving) { walker_advance(e.w); if (e.w.moving) continue; }
+        if (e.w.tx != e.mv_tx) walker_start(e.w, e.mv_tx > e.w.tx ? DIR_RIGHT : DIR_LEFT);
+        else if (e.w.ty != e.mv_ty) walker_start(e.w, e.mv_ty > e.w.ty ? DIR_DOWN : DIR_UP);
+        else { e.mv_active = false; e.w.step_len = NPC_STEP_TICKS; }
+    }
+    update_camera();
+}
+
 void field_update() {
     ++g_f.ticks;
     if (g_f.contact < 0) hero_update();
     for (int i = 0; i < g_f.ents.size() && g_f.contact < 0; ++i) entity_update(i);
     g_f.talk_target = g_f.contact < 0 ? talk_target_compute() : -1;
+    edges_update();
     update_camera();
 }
 
@@ -571,7 +837,7 @@ void field_entity_pixel(int i, int* px, int* py) {
 
 
 EntityLook look_by_name(const char* name, bool* ok) {
-    static const char* const N[ELOOK_COUNT] = { "slime", "guard", "mage", "smith" };
+    static const char* const N[ELOOK_COUNT] = { "slime", "guard", "mage", "smith", "watch", "warden", "stone" };
     for (int i = 0; i < ELOOK_COUNT; ++i) if (!strcmp(name, N[i])) { *ok = true; return (EntityLook)i; }
     *ok = false;
     return ELOOK_SLIME;

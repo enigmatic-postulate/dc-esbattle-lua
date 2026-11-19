@@ -20,7 +20,7 @@ import dmfio  # noqa: E402
 import import_chars  # noqa: E402
 
 CAST = [('knight', 'hero'), ('skel_warrior', 'skeleton'), ('skel_mage', 'skeleton_mage'), ('skel_rogue', 'skeleton_rogue'),
-        ('wren', 'mage'), ('brom', 'barbarian')]
+        ('wren', 'mage'), ('brom', 'barbarian'), ('corwin', 'ranger')]   # slice 3D-6: Corwin (the Ranger)
 
 
 def tris(m, head_sel):

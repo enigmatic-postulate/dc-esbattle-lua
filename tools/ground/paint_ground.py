@@ -42,6 +42,23 @@ D_BASE, D_LIGHT, D_DARK, D_DAMP = (142, 102, 60), (172, 130, 80), (106, 74, 44),
 STONES = [(150, 140, 126), (128, 120, 110), (166, 154, 136), (118, 100, 82)]                    # rocktrim, brick, boulders
 FLOWERS = [(244, 240, 226), (250, 214, 92), (214, 120, 168), (138, 150, 232)]
 OUTER = (30, 56, 28)
+CLOVER = (44, 104, 44)
+
+# Slice 3D-6: a palette per map (docs/NEXT_SLICE_BARROW.md 8). The barrow: dead olive grass, grey-brown earth, a pale
+# stone-grey path, moss; painted at full brightness and night-tinted at runtime (light `night`, src/lights.h).
+PALETTES = {
+    'village': None,                                   # the constants above (byte-identical to slice 3D-5's ground)
+    'barrow': dict(G_DARK=(62, 70, 40), G_MID=(84, 92, 52), G_LIGHT=(110, 114, 66), G_OLIVE=(104, 96, 56),
+                   D_BASE=(120, 110, 96), D_LIGHT=(150, 142, 128), D_DARK=(86, 78, 68), D_DAMP=(70, 64, 58),
+                   STONES=[(150, 146, 140), (126, 122, 118), (170, 166, 158), (110, 104, 98)],
+                   FLOWERS=[(226, 222, 236), (196, 184, 226), (236, 232, 214)], OUTER=(22, 26, 20), CLOVER=(58, 84, 52)),
+}
+
+
+def use_palette(name):
+    pal = PALETTES.get(name)
+    if pal:
+        globals().update(pal)
 
 
 # ------------------------------------------------------------------ noise helpers (deterministic, vectorised)
@@ -176,6 +193,7 @@ def to_tex(X, Z):
 # ------------------------------------------------------------------ painting
 def paint(map_path):
     name, w, h, rows, props = read_map(map_path)
+    use_palette(name)
     assert (w + 2 * MARGIN) * TPT <= SIZE and (h + 2 * MARGIN) * TPT <= SIZE, 'map too large for the ground texture'
     rng = np.random.default_rng(20261117)
     jj, ii = np.mgrid[0:SIZE, 0:SIZE].astype(np.float64)
@@ -228,7 +246,7 @@ def paint(map_path):
     g = mix(g, np.array(G_LIGHT) * 1.12, 0.55 * tip)
     # clover patches: small round leaves in darker, bluer green
     clover = smoothstep(0.72, 0.8, fbm(X * 2.3, Z * 2.3, 21, 3)) * (hash2(ii.astype(np.int64) // 2, jj.astype(np.int64) // 2, 22) > 0.45)
-    g = mix(g, (44, 104, 44), 0.6 * clover)
+    g = mix(g, CLOVER, 0.6 * clover)
 
     # --- dirt
     dn = kit_noise(X + 7.3, Z + 2.2, 4.0, 2)

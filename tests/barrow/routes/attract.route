@@ -1,0 +1,9 @@
+# The attract demo's recording (tools/make_attract.sh -> romdisk/demo/attract.in; GDD 5: "a recorded input script of the
+# first minutes: arrival, talk to Wren, first patrol"). Played from a new game's start (the host harness's game_init).
+pace 40
+choose 1 0
+talk wren
+chase slime_a
+wait 90
+talk brom
+wait 60

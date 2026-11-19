@@ -1,7 +1,8 @@
-// script.cpp - see script.h. The compiler runs once per map load; the VM per tick.
+// script.cpp - see script.h. The compiler runs once at boot (every map's scripts); the VM per tick.
 #include "script.h"
 #include "anim.h"
 #include "field.h"
+#include "lights.h"
 #include "progress.h"
 #include "text.h"
 #include <stdio.h>
@@ -10,6 +11,21 @@
 namespace bt {
 
 // ---------------------------------------------------------------------------- compiled pools (static)
+// Per map (slice 3D-6): its entities' talk scripts, win flags and `if` conditions, its triggers' scripts and
+// conditions, its exits' conditions, and which entity each actor slot is on it.
+struct MapLinks {
+    int16_t  ent_talk[MAX_ENTITIES], ent_win[MAX_ENTITIES];    // talk script, win flag (-1: none)
+    uint16_t ent_cond[MAX_ENTITIES];                           // `if` condition (length 0: always)
+    uint8_t  ent_cond_len[MAX_ENTITIES];
+    int16_t  trig_script[MAX_TRIGGERS];
+    uint16_t trig_cond[MAX_TRIGGERS];
+    uint8_t  trig_cond_len[MAX_TRIGGERS];
+    uint16_t exit_cond[MAX_EXITS];
+    uint8_t  exit_cond_len[MAX_EXITS];
+    uint16_t glow_cond[MAX_GLOWS];
+    uint8_t  glow_cond_len[MAX_GLOWS];
+    int8_t   bind[SCR_MAX_ACTORS];                             // actor slot -> entity index (-1: not on this map)
+};
 struct Pools {
     ScrOp     ops[SCR_MAX_OPS];
     char      str[SCR_STR_BYTES];
@@ -19,14 +35,16 @@ struct Pools {
     Marker    markers[SCR_MAX_MARKERS];
     uint16_t  objectives[SCR_MAX_OBJECTIVES];   // string offsets; [0] = none
     char      flags[MAX_FLAGS][16];
-    int16_t   ent_talk[MAX_ENTITIES], ent_win[MAX_ENTITIES];   // map links: talk script, win flag (-1: none)
-    uint16_t  ent_cond[MAX_ENTITIES];                          // `if` condition (length 0: always)
-    uint8_t   ent_cond_len[MAX_ENTITIES];
-    int nops, nstr, ncond, nscripts, nspeakers, nmarkers, nobjectives, nflags;
+    char      maps[MAX_MAPS][16];               // maps.txt (the index is the map id)
+    char      actors[SCR_MAX_ACTORS][16];       // actor slots: 0 = rowan
+    char      shots[MAX_MAPS][MAX_SHOTS][16];   // each map's shot names (CAM ops; the dump)
+    MapLinks  links[MAX_MAPS];
+    int nops, nstr, ncond, nscripts, nspeakers, nmarkers, nobjectives, nflags, nmaps, nactors;
 };
 static Pools g_pool;
 static bool  g_loaded = false;
 static char  g_err[320] = "";
+static int   g_map = 0;                         // the loaded map (script_set_map)
 
 // ---------------------------------------------------------------------------- compile-time scratch
 // Only used while compiling (load time); reported separately from the pools.
@@ -36,6 +54,18 @@ const int MAX_FIXUPS = 256;
 struct Label { char name[16]; int pc, line; };
 struct Fixup { int op, line; char name[16]; bool call; };
 struct IfFrame { int jz; int ends[12]; int nends; bool has_else; int line; };
+// What the compiler needs to know about each map (slice 3D-6), read from its file: entity ids and links, the
+// triggers' scripts and conditions, the exits' conditions, the shot names.
+struct MapScan {
+    int  nents, ntrig, nexits, nshots;
+    char ent_id[MAX_ENTITIES][16];
+    bool ent_npc[MAX_ENTITIES];
+    char ent_talk[MAX_ENTITIES][16], ent_win[MAX_ENTITIES][16], ent_cond[MAX_ENTITIES][64];
+    char trig_script[MAX_TRIGGERS][16], trig_cond[MAX_TRIGGERS][64];
+    char exit_cond[MAX_EXITS][64];
+    int  nglows;
+    char glow_cond[MAX_GLOWS][64];
+};
 struct Scratch {
     char    src[SRC_BYTES];
     Label   labels[SCR_MAX_LABELS];
@@ -44,17 +74,23 @@ struct Scratch {
     int     nlabels, nfix, nifs;
     const char* file;
     int     line;
+    MapScan scan[MAX_MAPS];
+    int     file_map;            // @map of the file being compiled (-1: none yet)
+    int     cur_map;             // the map the current line runs on (a script's @map, then its `map` commands)
+    char    files[SCR_MAX_FILES][24];
+    int     file_maps[SCR_MAX_FILES];
+    int     nfiles;
 };
 static Scratch g_s;
 
 static const char* const VAR_NAMES[VAR_COUNT] = { "neutral", "happy", "worried" };
 static const char* const EMOTE_NAMES[EMOTE_COUNT] = { "!", "?", "...", "sweat", "anger" };
 static const char* const DIR_NAMES[4] = { "down", "up", "left", "right" };
-static const char* const OUT_OF_SCOPE[] = { "cam", "move", "battle", "map", "light", "namecard", "card", "credits",
-                                            "results", "title", "transition" };
 static const char* const OP_NAMES[SC_COUNT] = {
     "END", "PAGE", "SYS", "CHOICE", "OPTION", "JMP", "JZ", "CALL", "STAGE", "MAXHP", "FLAG", "UNFLAG", "GIVE_POTIONS",
-    "TAKE_POTIONS", "HEAL", "CHECKPOINT", "OBJECTIVE", "FACE", "ANIM", "WAIT", "EMOTE", "FADE_OUT", "FADE_IN", "LETTERBOX" };
+    "TAKE_POTIONS", "HEAL", "CHECKPOINT", "OBJECTIVE", "FACE", "ANIM", "WAIT", "EMOTE", "FADE_OUT", "FADE_IN", "LETTERBOX",
+    "MOVE", "PLACE", "CAM", "PAR", "BATTLE", "MAP", "LIGHT", "LIGHT_LERP", "NAMECARD", "CARD", "TRANSITION", "CREDITS",
+    "RESULTS", "TITLE" };
 
 static bool fail(const char* msg, const char* detail = nullptr) {
     if (!g_err[0]) {
@@ -126,11 +162,31 @@ static int flag_find(const char* name) {
     return -1;
 }
 
+static int scan_entity(int map, const char* name) {
+    if (map < 0 || map >= g_pool.nmaps) return -1;
+    const MapScan& m = g_s.scan[map];
+    for (int i = 0; i < m.nents; ++i) if (!strcmp(m.ent_id[i], name)) return i;
+    return -1;
+}
+
+// An actor of the current line's map -> its slot (added on first use); -1 if unknown (the caller fails), -2 if it
+// is an entity of another map (fails here).
 static int actor_find(const char* name) {
     if (!strcmp(name, "rowan")) return 0;
-    const FieldState& f = field_state();
-    for (int i = 0; i < f.ents.size(); ++i) if (!strcmp(f.ents[i].id, name)) return 1 + i;
-    return -1;
+    if (scan_entity(g_s.cur_map, name) < 0) {
+        for (int m = 0; m < g_pool.nmaps; ++m)
+            if (scan_entity(m, name) >= 0) {
+                char d[96];
+                snprintf(d, sizeof d, "%s (on %s, the line runs on %s)", name, g_pool.maps[m], g_s.cur_map >= 0 ? g_pool.maps[g_s.cur_map] : "no map");
+                fail("actor not on the script's map", d);
+                return -2;
+            }
+        return -1;
+    }
+    for (int k = 1; k < g_pool.nactors; ++k) if (!strcmp(g_pool.actors[k], name)) return k;
+    if (g_pool.nactors >= SCR_MAX_ACTORS) { fail("too many actors (24)"); return -2; }
+    copy_str(g_pool.actors[g_pool.nactors], 16, name);
+    return g_pool.nactors++;
 }
 
 // ---------------------------------------------------------------------------- conditions
@@ -391,12 +447,81 @@ static bool stmt_choice(const char* rest) {
     return true;
 }
 
+static bool parse_sint(const char* s, int lo, int hi, int* out, bool* sign) {
+    *sign = *s == '-' || *s == '+';
+    const bool neg = *s == '-';
+    if (*sign) ++s;
+    int v;
+    if (!parse_uint(s, 0, 100000, &v)) return false;
+    v = neg ? -v : v;
+    if (v < lo || v > hi) return false;
+    *out = v;
+    return true;
+}
+
+static int dir_index(const char* s) {
+    for (int d = 0; d < 4; ++d) if (!strcmp(s, DIR_NAMES[d])) return d;
+    return -1;
+}
+
+// A quoted string argument ("text") into t (cap bytes); false if it is not one.
+static bool quoted_arg(const char* rest, char* t, int cap) {
+    const char* q = skip_ws(rest);
+    const int L = (int)strlen(q);
+    if (L < 2 || q[0] != '"' || q[L - 1] != '"' || L - 2 >= cap) return false;
+    memcpy(t, q + 1, (size_t)(L - 2)); t[L - 2] = '\0';
+    return !strchr(t, '"');
+}
+
+static bool stmt_single(const char* line, bool in_par);
+
+// Slice 3D-6: `a | b | c` runs actor commands together; the line ends when all have ended (docs/NEXT_SLICE_BARROW.md 5.5).
+static bool stmt_parallel(const char* line) {
+    char buf[512];
+    copy_str(buf, (int)sizeof buf, line);
+    char* parts[4];
+    int n = 0;
+    char* seg = buf;
+    for (char* c = buf;; ++c) {
+        if (*c == '|' || !*c) {
+            const bool end = !*c;
+            *c = '\0';
+            if (n >= 4) return fail("a parallel line has at most 4 commands");
+            parts[n++] = seg;
+            if (end) break;
+            seg = c + 1;
+        }
+    }
+    if (n < 2) return fail("a parallel line needs two commands");
+    if (emit(SC_PAR, n) < 0) return false;
+    for (int i = 0; i < n; ++i) {
+        const char* p = skip_ws(parts[i]);
+        char w[24];
+        next_token(p, w, sizeof w);
+        if (strcmp(w, "move") && strcmp(w, "anim") && strcmp(w, "face") && strcmp(w, "emote") && strcmp(w, "cam") && strcmp(w, "wait"))
+            return fail("only move, anim, face, emote, cam and wait may run in parallel", w);
+        char one[200];
+        copy_str(one, (int)sizeof one, p);
+        int L = (int)strlen(one);
+        while (L > 0 && is_space(one[L - 1])) one[--L] = '\0';
+        if (!stmt_single(one, true)) return false;
+    }
+    return true;
+}
+
 static bool stmt_command(const char* line) {
+    char w[24];
+    const char* rest = next_token(line, w, sizeof w);
+    if (!strcmp(w, "choice")) return stmt_choice(skip_ws(rest));
+    bool q = false;
+    for (const char* c = line; *c; ++c) { if (*c == '"') q = !q; else if (*c == '|' && !q) return stmt_parallel(line); }
+    return stmt_single(line, false);
+}
+
+static bool stmt_single(const char* line, bool in_par) {
     char w[24], a1[64], a2[64];
     const char* rest = next_token(line, w, sizeof w);
-    for (const char* o : OUT_OF_SCOPE) if (!strcmp(w, o)) return fail("command not in this slice", w);
-    if (!strcmp(w, "choice")) return stmt_choice(skip_ws(rest));
-    if (strchr(line, '|')) return fail("parallel commands (cmd | cmd) are not in this slice");
+    (void)in_par;
     const char* r2 = next_token(rest, a1, sizeof a1);
     const char* r3 = next_token(r2, a2, sizeof a2);
     const bool more = *skip_ws(r3) != '\0';
@@ -446,8 +571,8 @@ static bool stmt_command(const char* line) {
     if (!strcmp(w, "heal")) { if (a1[0]) return fail("heal takes no argument"); return emit(SC_HEAL) >= 0; }
     if (!strcmp(w, "checkpoint")) {
         int id = 1;
-        if (!strcmp(a1, "c1")) id = 1; else if (!strcmp(a1, "c2")) id = 2; else if (!strcmp(a1, "rest")) id = 9;
-        else if (a1[0]) return fail("checkpoint [c1|c2|rest]", a1);
+        if (!strcmp(a1, "c1")) id = 1; else if (!strcmp(a1, "c2")) id = 2; else if (!strcmp(a1, "c3")) id = 3; else if (!strcmp(a1, "rest")) id = 9;
+        else if (a1[0]) return fail("checkpoint [c1|c2|c3|rest]", a1);
         if (a2[0]) return fail("checkpoint takes one id at most");
         return emit(SC_CHECKPOINT, id) >= 0;
     }
@@ -513,6 +638,102 @@ static bool stmt_command(const char* line) {
         if (a2[0] || (strcmp(a1, "on") && strcmp(a1, "off"))) return fail("letterbox on|off");
         return emit(SC_LETTERBOX, a1[1] == 'n') >= 0;
     }
+    // ---- slice 3D-6: cutscene commands (docs/NEXT_SLICE_BARROW.md 5.5)
+    if (!strcmp(w, "move")) {
+        // move <actor> <x> <y> [run]: to a tile; a signed number (move rowan -1 0) makes the move relative
+        char a3[16], a4[16];
+        const char* r4 = next_token(r3, a3, sizeof a3);
+        const char* r5 = next_token(r4, a4, sizeof a4);
+        const int a = actor_find(a1);
+        if (a < 0) return fail("move: unknown actor (rowan or a map entity id)", a1);
+        int x, y;
+        bool sx, sy;
+        if (!parse_sint(a2, -63, 63, &x, &sx) || !parse_sint(a3, -63, 63, &y, &sy) || (a4[0] && strcmp(a4, "run")) || *skip_ws(r5))
+            return fail("move <actor> <x> <y> [run] (a signed dx dy: relative)");
+        const bool rel = sx || sy;
+        if (!rel && (x < 0 || y < 0)) return fail("move: a tile is 0..63");
+        return emit(SC_MOVE, a, (x & 0xFF) | (y & 0xFF) << 8, (rel ? MOVE_REL : 0) | (a4[0] ? MOVE_RUN : 0)) >= 0;
+    }
+    if (!strcmp(w, "place")) {
+        char a3[16], a4[16];
+        const char* r4 = next_token(r3, a3, sizeof a3);
+        const char* r5 = next_token(r4, a4, sizeof a4);
+        const int a = actor_find(a1);
+        if (a < 0) return fail("place: unknown actor (rowan or a map entity id)", a1);
+        int x, y;
+        const int d = a4[0] ? dir_index(a4) : 0;
+        if (!parse_uint(a2, 0, 63, &x) || !parse_uint(a3, 0, 63, &y) || d < 0 || *skip_ws(r5)) return fail("place <actor> <x> <y> [down|up|left|right]");
+        return emit(SC_PLACE, a, x | y << 8, d) >= 0;
+    }
+    if (!strcmp(w, "cam")) {
+        // cam <shot|field> [ticks]: eases to a shot of the map (0 ticks: a cut); blocks for the ease
+        int t = 0;
+        if (more || (a2[0] && !parse_uint(a2, 0, 600, &t))) return fail("cam <shot|field> [0..600 ticks]");
+        if (!strcmp(a1, "field")) return emit(SC_CAM, CAM_FIELD, t, g_s.cur_map < 0 ? 0 : g_s.cur_map) >= 0;
+        int shot = -1;
+        if (g_s.cur_map >= 0)
+            for (int i = 0; i < MAX_SHOTS; ++i) if (g_pool.shots[g_s.cur_map][i][0] && !strcmp(g_pool.shots[g_s.cur_map][i], a1)) shot = i;
+        if (shot < 0) return fail("cam: unknown shot (not a `shot` of the script's map)", a1);
+        return emit(SC_CAM, shot, t, g_s.cur_map) >= 0;
+    }
+    if (!strcmp(w, "battle")) {
+        const int a = actor_find(a1);
+        if (a <= 0) return fail("battle: not an enemy of the script's map", a1);
+        const int e = scan_entity(g_s.cur_map, a1);
+        if (e < 0 || g_s.scan[g_s.cur_map].ent_npc[e]) return fail("battle: not an enemy of the script's map", a1);
+        if (more || (a2[0] && strcmp(a2, "boss"))) return fail("battle <enemy> [boss]");
+        return emit(SC_BATTLE, a, a2[0] ? 1 : 0) >= 0;
+    }
+    if (!strcmp(w, "map")) {
+        // map <name> <x> <y> <dir> [light <preset>]
+        char a3[16], a4[16], a5[16], a6[16];
+        const char* r4 = next_token(r3, a3, sizeof a3);
+        const char* r5 = next_token(r4, a4, sizeof a4);
+        const char* r6 = next_token(r5, a5, sizeof a5);
+        const char* r7 = next_token(r6, a6, sizeof a6);
+        const int m = script_map_find(a1);
+        if (m < 0) return fail("map: not a map of maps.txt", a1);
+        int x, y;
+        const int d = dir_index(a4);
+        if (!parse_uint(a2, 0, 63, &x) || !parse_uint(a3, 0, 63, &y) || d < 0 || *skip_ws(r7) || (a5[0] && (strcmp(a5, "light") || !a6[0])))
+            return fail("map <name> <x> <y> <dir> [light <preset>]");
+        int preset = -1;
+        if (a5[0]) { preset = light_find(a6); if (preset < 0) return fail("map: unknown light preset (lights.txt)", a6); }
+        g_s.cur_map = m;                                  // the following lines run on that map
+        return emit(SC_MAP, m, x | y << 8, d | (preset + 1) << 4) >= 0;
+    }
+    if (!strcmp(w, "light")) {
+        if (!strcmp(a1, "lerp")) {
+            char a3[16], a4[16];
+            const char* r4 = next_token(r3, a3, sizeof a3);
+            const char* r5 = next_token(r4, a4, sizeof a4);
+            const int from = light_find(a2), to = light_find(a3);
+            int t;
+            if (from < 0 || to < 0 || !parse_uint(a4, 1, 3600, &t) || *skip_ws(r5)) return fail("light lerp <preset> <preset> <1..3600 ticks> (presets of lights.txt)");
+            return emit(SC_LIGHT_LERP, from, t, to) >= 0;
+        }
+        const int l = light_find(a1);
+        if (l < 0 || a2[0]) return fail("light <preset> | light lerp <a> <b> <ticks> (presets of lights.txt)", a1);
+        return emit(SC_LIGHT, l) >= 0;
+    }
+    if (!strcmp(w, "namecard") || !strcmp(w, "card")) {
+        char t[48];
+        if (!quoted_arg(rest, t, (int)sizeof t) || !t[0]) return fail("namecard|card \"text\" (1..47 characters)");
+        static char one_line[200];
+        if (text_wrap(t, 560, one_line, (int)sizeof one_line) != 1) return fail("card text must fit one line of 560 px", t);
+        const int off = add_str(t);
+        if (off < 0) return false;
+        return emit(w[0] == 'n' ? SC_NAMECARD : SC_CARD, 0, w[0] == 'n' ? NAMECARD_TICKS : CARD_TICKS, 0, off) >= 0;
+    }
+    if (!strcmp(w, "transition")) {
+        int id;
+        if (a2[0] || a1[0] != 'T' || !parse_uint(a1 + 1, 1, 11, &id)) return fail("transition T1..T11");
+        return emit(SC_TRANSITION, id) >= 0;
+    }
+    if (!strcmp(w, "credits") || !strcmp(w, "results") || !strcmp(w, "title")) {
+        if (a1[0]) return fail("credits, results and title take no argument");
+        return emit(w[0] == 'c' ? SC_CREDITS : w[0] == 'r' ? SC_RESULTS : SC_TITLE) >= 0;
+    }
     return fail("unknown command", w);
 }
 
@@ -523,13 +744,23 @@ static bool stmt(const char* line) {
         rest = skip_ws(rest);
         if (!strcmp(w, "@flags")) return true;                  // first pass
         if (!strcmp(w, "@speaker")) return fail("@speaker belongs in speakers.txt");
+        if (!strcmp(w, "@map")) {                                    // slice 3D-6: the map the following scripts start on
+            if (in_script()) { if (!close_script()) return false; }
+            char name[24];
+            rest = next_token(rest, name, sizeof name);
+            const int m = script_map_find(name);
+            if (m < 0 || *skip_ws(rest)) return fail("@map <a map of maps.txt>", name);
+            g_s.file_map = g_s.cur_map = m;
+            return true;
+        }
         if (!strcmp(w, "@marker")) {
             if (in_script()) return fail("@marker inside a script");
             char id[24], kind[8];
             rest = next_token(rest, id, sizeof id);
             rest = next_token(rest, kind, sizeof kind);
-            const int a = actor_find(id);
-            if (a <= 0 || field_state().ents[a - 1].kind != EntityKind::Npc) return fail("@marker: not an npc of the map", id);
+            g_s.cur_map = g_s.file_map;
+            const int e = scan_entity(g_s.file_map, id);
+            if (e < 0 || !g_s.scan[g_s.file_map].ent_npc[e]) return fail("@marker: not an npc of the map", id);
             int k;
             if (!strcmp(kind, "!")) k = MARK_QUEST; else if (!strcmp(kind, "...")) k = MARK_TALK;
             else return fail("@marker kind must be ! or ...", kind);
@@ -538,20 +769,24 @@ static bool stmt(const char* line) {
             const int off = compile_cond(rest, &len);
             if (off < 0) return false;
             Marker& m = g_pool.markers[g_pool.nmarkers++];
-            m.entity = (int8_t)(a - 1); m.kind = (uint8_t)k; m.cond_len = (uint8_t)len; m.pad = 0; m.cond = (uint16_t)off;
+            m.entity = (int8_t)e; m.kind = (uint8_t)k; m.cond_len = (uint8_t)len; m.map = (uint8_t)g_s.file_map; m.cond = (uint16_t)off;
             return true;
         }
         if (!strcmp(w, "@script")) {
             if (!close_script()) return false;
-            char name[24];
+            char name[24], opt[16];
             rest = next_token(rest, name, sizeof name);
-            if (!name[0] || *skip_ws(rest) || strlen(name) > 15) return fail("@script <name> (15 characters at most)");
+            rest = next_token(rest, opt, sizeof opt);
+            if (!name[0] || *skip_ws(rest) || strlen(name) > 15 || (opt[0] && strcmp(opt, "skip"))) return fail("@script <name> [skip] (15 characters at most)");
+            if (g_s.file_map < 0) return fail("@script before @map (this file is not a map's: say where its scripts start)");
             for (const char* c = name; *c; ++c) if (!is_ident_char(*c)) return fail("bad script name", name);
             if (script_find(name) >= 0) return fail("duplicate script", name);
             if (g_pool.nscripts >= SCR_MAX_SCRIPTS) return fail("too many scripts (32)");
             ScriptDef& d = g_pool.scripts[g_pool.nscripts++];
             copy_str(d.name, (int)sizeof d.name, name);
             d.first = (uint16_t)g_pool.nops; d.end = 0xFFFF;
+            d.map = (uint8_t)g_s.file_map; d.skip = opt[0] ? 1 : 0;
+            g_s.cur_map = g_s.file_map;
             return true;
         }
         if (!in_script()) return fail("statement outside a @script", w);
@@ -643,6 +878,8 @@ static bool check_fall_off(const ScriptDef& d) {
         case SC_JZ: push(pc + 1); push(o.b); break;
         case SC_CHOICE: for (int k = 0; k < o.a; ++k) push(g_pool.ops[pc + 1 + k].b); break;
         case SC_OPTION: break;
+        case SC_PAR: push(pc + 1 + o.a); break;
+        case SC_TITLE: break;                                   // the session ends
         default: push(pc + 1); break;
         }
     }
@@ -691,71 +928,221 @@ static bool load_speakers() {
     return true;
 }
 
-// The map's entities against the compiled scripts: talk scripts, win flags, `if` conditions.
-static bool link_map(const char* map_file) {
-    const FieldState& f = field_state();
-    g_s.file = map_file; g_s.line = 0;
-    for (int i = 0; i < f.ents.size(); ++i) {
-        const Entity& e = f.ents[i];
-        g_pool.ent_talk[i] = -1; g_pool.ent_win[i] = -1; g_pool.ent_cond_len[i] = 0;
-        char who[40];
-        snprintf(who, sizeof who, "entity %s", e.id);
-        if (e.talk[0]) {
-            g_pool.ent_talk[i] = (int16_t)script_find(e.talk);
-            if (g_pool.ent_talk[i] < 0) return fail("talk: unknown script", who);
-        }
-        if (e.win[0]) {
-            g_pool.ent_win[i] = (int16_t)flag_find(e.win);
-            if (g_pool.ent_win[i] < 0) return fail("win: flag not declared in @flags", who);
-        }
-        if (e.cond[0]) {
-            int len = 0;
-            const int off = compile_cond(e.cond, &len);
-            if (off < 0) return fail("bad 'if' condition", who);
-            g_pool.ent_cond[i] = (uint16_t)off; g_pool.ent_cond_len[i] = (uint8_t)len;
+// ---------------------------------------------------------------------------- maps (slice 3D-6)
+// Reads what the compiler needs from a map file (the same lines field_load parses, in the same order): entity ids,
+// kinds, talk scripts, win flags and `if` conditions; triggers' scripts and conditions; exits' conditions; shots.
+static bool scan_map(int mi) {
+    MapScan& m = g_s.scan[mi];
+    memset(&m, 0, sizeof m);
+    char path[64];
+    snprintf(path, sizeof path, "/rd/maps/%s.txt", g_pool.maps[mi]);
+    static char fname[32];
+    snprintf(fname, sizeof fname, "maps/%s.txt", g_pool.maps[mi]);
+    g_s.file = fname; g_s.line = 0;
+    const int n = eng::file_read(path, g_s.src, SRC_BYTES);
+    if (n < 0) return fail("map file missing or larger than 16 KiB");
+    int line_no = 0;
+    for (char* line = g_s.src; line && *line;) {
+        char* next = strchr(line, '\n');
+        if (next) *next++ = '\0';
+        ++line_no;
+        g_s.line = line_no;
+        char body[200];
+        copy_str(body, (int)sizeof body, line);
+        int L = (int)strlen(body);
+        while (L > 0 && (body[L - 1] == '\r' || body[L - 1] == ' ')) body[--L] = '\0';
+        line = next;
+        char* hash = strstr(body, " #");
+        if (hash) *hash = '\0';
+        char cond[64] = "";
+        char* c = strstr(body, " if ");
+        const bool has_if = c != nullptr;
+        if (c) { *c = '\0'; copy_str(cond, (int)sizeof cond, skip_ws(c + 4)); }
+        char w[16], t[20][16];
+        const char* r = next_token(body, w, sizeof w);
+        int nt = 0;
+        while (nt < 20) { r = next_token(r, t[nt], 16); if (!t[nt][0]) break; ++nt; }
+        if (!strcmp(w, "entity") && nt >= 6) {
+            if (m.nents >= MAX_ENTITIES) return fail("too many entities");
+            const int i = m.nents++;
+            copy_str(m.ent_id[i], 16, t[0]);
+            m.ent_npc[i] = !strcmp(t[1], "npc");
+            if (m.ent_npc[i] && nt >= 8 && !strcmp(t[6], "talk")) copy_str(m.ent_talk[i], 16, t[7]);
+            for (int k = 6; k + 1 < nt; ++k) if (!strcmp(t[k], "win")) copy_str(m.ent_win[i], 16, t[k + 1]);
+            if (has_if) copy_str(m.ent_cond[i], 64, cond);
+        } else if (!strcmp(w, "trigger") && nt >= 6) {
+            if (m.ntrig >= MAX_TRIGGERS) return fail("too many triggers");
+            copy_str(m.trig_script[m.ntrig], 16, t[5]);
+            if (has_if) copy_str(m.trig_cond[m.ntrig], 64, cond);
+            ++m.ntrig;
+        } else if (!strcmp(w, "exit") && nt >= 9) {
+            if (m.nexits >= MAX_EXITS) return fail("too many exits");
+            if (script_map_find(t[5]) < 0) return fail("exit: the destination is not a map of maps.txt", t[5]);
+            if (has_if) copy_str(m.exit_cond[m.nexits], 64, cond);
+            ++m.nexits;
+        } else if (!strcmp(w, "glow") && nt >= 4) {
+            if (m.nglows >= MAX_GLOWS) return fail("too many glows");
+            if (has_if) copy_str(m.glow_cond[m.nglows], 64, cond);
+            ++m.nglows;
+        } else if (!strcmp(w, "shot") && nt >= 1) {
+            if (m.nshots >= MAX_SHOTS) return fail("too many shots");
+            copy_str(g_pool.shots[mi][m.nshots++], 16, t[0]);
+        } else if (!strcmp(w, "light") && nt >= 1) {
+            if (light_find(t[0]) < 0) return fail("light: unknown preset (lights.txt)", t[0]);
         }
     }
     return true;
 }
 
-int script_entity_talk(int i) { return (i >= 0 && i < MAX_ENTITIES) ? g_pool.ent_talk[i] : -1; }
-int script_entity_win_flag(int i) { return (i >= 0 && i < MAX_ENTITIES) ? g_pool.ent_win[i] : -1; }
-bool script_entity_visible(int i, const Progress& p) {
-    if (i < 0 || i >= MAX_ENTITIES || !g_pool.ent_cond_len[i]) return true;
-    return cond_eval(g_pool.cond + g_pool.ent_cond[i], g_pool.ent_cond_len[i], p) != 0;
+// maps.txt: `map <name>` (in map id order), `scripts <file>` (extra script files). A map that is not listed
+// (test_field) makes a one-map table of its own.
+static bool load_maps(const char* current) {
+    g_pool.nmaps = 0; g_s.nfiles = 0;
+    static char buf[1024];
+    g_s.file = "maps.txt"; g_s.line = 0;
+    if (eng::file_read("/rd/maps/maps.txt", buf, sizeof buf) >= 0) {
+        int line_no = 0;
+        for (char* line = buf; line && *line;) {
+            char* next = strchr(line, '\n');
+            if (next) *next++ = '\0';
+            g_s.line = ++line_no;
+            char* hash = strchr(line, '#');
+            if (hash) *hash = '\0';
+            char w[16], name[24], extra[8];
+            const char* r = next_token(line, w, sizeof w);
+            r = next_token(r, name, sizeof name);
+            next_token(r, extra, sizeof extra);
+            line = next;
+            if (!w[0] || w[0] == '\r') continue;
+            int L = (int)strlen(name);
+            while (L > 0 && name[L - 1] == '\r') name[--L] = '\0';
+            if (!name[0] || strlen(name) > 15 || (extra[0] && extra[0] != '\r')) return fail("map <name> | scripts <file>");
+            if (!strcmp(w, "map")) {
+                if (g_pool.nmaps >= MAX_MAPS) return fail("too many maps (4)");
+                if (script_map_find(name) >= 0) return fail("duplicate map", name);
+                copy_str(g_pool.maps[g_pool.nmaps++], 16, name);
+            } else if (!strcmp(w, "scripts")) {
+                if (g_s.nfiles >= SCR_MAX_FILES - MAX_MAPS) return fail("too many script files");
+                copy_str(g_s.files[g_s.nfiles], 24, name);
+                g_s.file_maps[g_s.nfiles++] = -1;
+            } else return fail("map <name> | scripts <file>", w);
+        }
+    }
+    if (script_map_find(current) < 0) {                 // not a map of the game: its own script file only
+        g_pool.nmaps = 1; g_s.nfiles = 0;
+        copy_str(g_pool.maps[0], 16, current);
+    }
+    // the maps' own script files come first, in map order
+    for (int k = g_s.nfiles - 1; k >= 0; --k) { memcpy(g_s.files[k + g_pool.nmaps], g_s.files[k], 24); g_s.file_maps[k + g_pool.nmaps] = -1; }
+    for (int m = 0; m < g_pool.nmaps; ++m) { copy_str(g_s.files[m], 24, g_pool.maps[m]); g_s.file_maps[m] = m; }
+    g_s.nfiles += g_pool.nmaps;
+    for (int m = 0; m < g_pool.nmaps; ++m) if (!scan_map(m)) return false;
+    return true;
 }
 
-bool script_load(const char* map_name) {
-    memset(&g_pool, 0, sizeof g_pool);
-    memset(&g_s, 0, sizeof g_s);
-    g_err[0] = '\0';
-    g_loaded = false;
-    g_pool.nobjectives = 1;                      // id 0 = no objective
-    for (int i = 0; i < MAX_ENTITIES; ++i) { g_pool.ent_talk[i] = -1; g_pool.ent_win[i] = -1; }
-    char path[64];
-    snprintf(path, sizeof path, "/rd/scripts/%s.txt", map_name);
-    static char fname[32];
-    snprintf(fname, sizeof fname, "%s.txt", map_name);
-    if (!eng::file_exists(path)) {               // no quest on this map (test_field): nothing may need one
-        progress_bind_flags(g_pool.flags, 0);
-        for (const Entity& e : field_state().ents)
-            if (e.talk[0] || e.win[0] || e.cond[0]) { g_s.file = fname; return fail("the map uses talk / win / if but has no script file", e.id); }
-        return true;
+static bool link_cond(const char* cond, uint16_t* off, uint8_t* len, const char* who) {
+    *len = 0;
+    if (!cond[0]) return true;
+    int n = 0;
+    const int o = compile_cond(cond, &n);
+    if (o < 0) return fail("bad 'if' condition", who);
+    *off = (uint16_t)o; *len = (uint8_t)n;
+    return true;
+}
+
+// Every map's entities, triggers and exits against the compiled scripts; the actor slots bound to each map.
+static bool link_maps() {
+    for (int mi = 0; mi < g_pool.nmaps; ++mi) {
+        const MapScan& m = g_s.scan[mi];
+        MapLinks& L = g_pool.links[mi];
+        static char fname[32];
+        snprintf(fname, sizeof fname, "maps/%s.txt", g_pool.maps[mi]);
+        g_s.file = fname; g_s.line = 0;
+        for (int i = 0; i < MAX_ENTITIES; ++i) { L.ent_talk[i] = L.ent_win[i] = -1; L.ent_cond_len[i] = 0; }
+        for (int i = 0; i < MAX_TRIGGERS; ++i) { L.trig_script[i] = -1; L.trig_cond_len[i] = 0; }
+        for (int i = 0; i < MAX_EXITS; ++i) L.exit_cond_len[i] = 0;
+        for (int i = 0; i < MAX_GLOWS; ++i) L.glow_cond_len[i] = 0;
+        char who[40];
+        for (int i = 0; i < m.nents; ++i) {
+            snprintf(who, sizeof who, "entity %s", m.ent_id[i]);
+            if (m.ent_talk[i][0]) {
+                L.ent_talk[i] = (int16_t)script_find(m.ent_talk[i]);
+                if (L.ent_talk[i] < 0) return fail("talk: unknown script", who);
+            }
+            if (m.ent_win[i][0]) {
+                L.ent_win[i] = (int16_t)flag_find(m.ent_win[i]);
+                if (L.ent_win[i] < 0) return fail("win: flag not declared in @flags", who);
+            }
+            if (!link_cond(m.ent_cond[i], &L.ent_cond[i], &L.ent_cond_len[i], who)) return false;
+        }
+        for (int i = 0; i < m.ntrig; ++i) {
+            snprintf(who, sizeof who, "trigger %d", i);
+            L.trig_script[i] = (int16_t)script_find(m.trig_script[i]);
+            if (L.trig_script[i] < 0) return fail("trigger: unknown script", m.trig_script[i]);
+            if (!link_cond(m.trig_cond[i], &L.trig_cond[i], &L.trig_cond_len[i], who)) return false;
+        }
+        for (int i = 0; i < m.nexits; ++i) {
+            snprintf(who, sizeof who, "exit %d", i);
+            if (!link_cond(m.exit_cond[i], &L.exit_cond[i], &L.exit_cond_len[i], who)) return false;
+        }
+        for (int i = 0; i < m.nglows; ++i) {
+            snprintf(who, sizeof who, "glow %d", i);
+            if (!link_cond(m.glow_cond[i], &L.glow_cond[i], &L.glow_cond_len[i], who)) return false;
+        }
+        for (int k = 0; k < SCR_MAX_ACTORS; ++k) L.bind[k] = (int8_t)(k > 0 && k < g_pool.nactors ? scan_entity(mi, g_pool.actors[k]) : -1);
     }
-    if (!text_ready()) { g_s.file = fname; return fail("the dialog font is needed to compile scripts (page fit)"); }
-    if (!load_speakers()) return false;
-    g_s.file = fname; g_s.line = 0;
-    const int n = eng::file_read(path, g_s.src, SRC_BYTES);
-    if (n < 0) return fail("script file missing or larger than 16 KiB");
-    static char* lines[SCR_MAX_LINES];
-    const int nl = split_lines(g_s.src, lines, SCR_MAX_LINES);
-    if (nl < 0) return fail("more than 2048 lines");
-    // pass 1: @flags
+    return true;
+}
+
+static const MapLinks& cur_links() { return g_pool.links[g_map >= 0 && g_map < MAX_MAPS ? g_map : 0]; }
+int script_entity_talk(int i) { return (i >= 0 && i < MAX_ENTITIES) ? cur_links().ent_talk[i] : -1; }
+int script_entity_win_flag(int i) { return (i >= 0 && i < MAX_ENTITIES) ? cur_links().ent_win[i] : -1; }
+bool script_entity_visible(int i, const Progress& p) {
+    if (i < 0 || i >= MAX_ENTITIES || !cur_links().ent_cond_len[i]) return true;
+    return cond_eval(g_pool.cond + cur_links().ent_cond[i], cur_links().ent_cond_len[i], p) != 0;
+}
+int script_trigger_script(int i) { return (i >= 0 && i < MAX_TRIGGERS) ? cur_links().trig_script[i] : -1; }
+bool script_trigger_active(int i, const Progress& p) {
+    if (i < 0 || i >= MAX_TRIGGERS) return false;
+    if (!cur_links().trig_cond_len[i]) return true;
+    return cond_eval(g_pool.cond + cur_links().trig_cond[i], cur_links().trig_cond_len[i], p) != 0;
+}
+bool script_exit_open(int i, const Progress& p) {
+    if (i < 0 || i >= MAX_EXITS) return false;
+    if (!cur_links().exit_cond_len[i]) return true;
+    return cond_eval(g_pool.cond + cur_links().exit_cond[i], cur_links().exit_cond_len[i], p) != 0;
+}
+bool script_glow_on(int i, const Progress& p) {
+    if (i < 0 || i >= MAX_GLOWS) return false;
+    if (!cur_links().glow_cond_len[i]) return true;
+    return cond_eval(g_pool.cond + cur_links().glow_cond[i], cur_links().glow_cond_len[i], p) != 0;
+}
+bool script_marker_here(const Marker& m) { return m.map == g_map; }
+int  script_map_count() { return g_pool.nmaps; }
+int  script_map_find(const char* name) {
+    for (int i = 0; i < g_pool.nmaps; ++i) if (!strcmp(g_pool.maps[i], name)) return i;
+    return -1;
+}
+const char* script_map_name(int m) { return (m >= 0 && m < g_pool.nmaps) ? g_pool.maps[m] : "?"; }
+void script_set_map(int m) { g_map = (m >= 0 && m < MAX_MAPS) ? m : 0; }
+int  script_current_map() { return g_map; }
+int  script_actor_entity(int slot) { return (slot > 0 && slot < SCR_MAX_ACTORS) ? cur_links().bind[slot] : -1; }
+int  script_actor_slot(const char* name) {
+    if (!strcmp(name, "rowan")) return 0;
+    for (int k = 1; k < g_pool.nactors; ++k) if (!strcmp(g_pool.actors[k], name)) return k;
+    return -1;
+}
+const char* script_actor_name(int slot) { return (slot >= 0 && slot < g_pool.nactors) ? g_pool.actors[slot] : "?"; }
+
+// Pass 1 over a file: its @flags (every file's flags form one list, before anything is compiled).
+static bool file_flags(char** lines, int nl) {
+    bool seen = false;
     for (int i = 0; i < nl; ++i) {
         const char* s = skip_ws(lines[i]);
         if (strncmp(s, "@flags", 6) || (s[6] && !is_space(s[6]))) continue;
         g_s.line = i + 1;
-        if (g_pool.nflags) return fail("@flags declared twice");
+        if (seen) return fail("@flags declared twice");
+        seen = true;
         s += 6;
         char tok[24];
         for (s = next_token(s, tok, sizeof tok); tok[0]; s = next_token(s, tok, sizeof tok)) {
@@ -767,18 +1154,85 @@ bool script_load(const char* map_name) {
             copy_str(g_pool.flags[g_pool.nflags++], 16, tok);
         }
     }
-    // pass 2: everything else
-    static char logical[512];
-    for (int i = 0; i < nl;) {
-        int line_no;
-        i = logical_line(lines, nl, i, logical, sizeof logical, &line_no);
-        g_s.line = line_no;
-        if (!logical[0]) continue;
-        if (logical[0] == '|') return fail("a '|' continuation line must follow a choice");
-        if (!stmt(logical)) return false;
+    return true;
+}
+
+static bool read_file(int k, char*** lines_out, int* nl_out, bool* exists) {
+    char path[64];
+    snprintf(path, sizeof path, "/rd/scripts/%s.txt", g_s.files[k]);
+    static char fname[32];
+    snprintf(fname, sizeof fname, "%s.txt", g_s.files[k]);
+    g_s.file = fname; g_s.line = 0;
+    *exists = eng::file_exists(path);
+    if (!*exists) return true;
+    const int n = eng::file_read(path, g_s.src, SRC_BYTES);
+    if (n < 0) return fail("script file missing or larger than 16 KiB");
+    static char* lines[SCR_MAX_LINES];
+    const int nl = split_lines(g_s.src, lines, SCR_MAX_LINES);
+    if (nl < 0) return fail("more than 2048 lines");
+    *lines_out = lines; *nl_out = nl;
+    return true;
+}
+
+bool script_load(const char* map_name) {
+    memset(&g_pool, 0, sizeof g_pool);
+    memset(&g_s, 0, sizeof g_s);
+    g_err[0] = '\0';
+    g_loaded = false;
+    g_pool.nobjectives = 1;                      // id 0 = no objective
+    g_pool.nactors = 1;                          // slot 0 = rowan
+    copy_str(g_pool.actors[0], 16, "rowan");
+    for (int m = 0; m < MAX_MAPS; ++m) {
+        for (int i = 0; i < MAX_ENTITIES; ++i) { g_pool.links[m].ent_talk[i] = -1; g_pool.links[m].ent_win[i] = -1; }
+        for (int i = 0; i < MAX_TRIGGERS; ++i) g_pool.links[m].trig_script[i] = -1;
+        for (int k = 0; k < SCR_MAX_ACTORS; ++k) g_pool.links[m].bind[k] = -1;
     }
-    g_s.line = nl;
-    if (!close_script()) return false;
+    g_map = 0;
+    if (!load_maps(map_name)) return false;
+    // which script files exist
+    bool any = false;
+    for (int k = 0; k < g_s.nfiles; ++k) {
+        char path[64];
+        snprintf(path, sizeof path, "/rd/scripts/%s.txt", g_s.files[k]);
+        any = any || eng::file_exists(path);
+    }
+    static char fname[32];
+    snprintf(fname, sizeof fname, "%s.txt", map_name);
+    if (!any) {                                  // no quest on this map (test_field): nothing may need one
+        progress_bind_flags(g_pool.flags, 0);
+        const MapScan& m = g_s.scan[0];
+        for (int i = 0; i < m.nents; ++i)
+            if (m.ent_talk[i][0] || m.ent_win[i][0] || m.ent_cond[i][0]) { g_s.file = fname; return fail("the map uses talk / win / if but has no script file", m.ent_id[i]); }
+        if (m.ntrig || m.nexits) { g_s.file = fname; return fail("the map has triggers or exits but no script file"); }
+        script_set_map(script_map_find(map_name));
+        return true;
+    }
+    if (!text_ready()) { g_s.file = fname; return fail("the dialog font is needed to compile scripts (page fit)"); }
+    if (!load_speakers()) return false;
+    // pass 1: every file's @flags
+    for (int k = 0; k < g_s.nfiles; ++k) {
+        char** lines = nullptr; int nl = 0; bool exists = false;
+        if (!read_file(k, &lines, &nl, &exists)) return false;
+        if (exists && !file_flags(lines, nl)) return false;
+    }
+    // pass 2: everything else, file by file
+    static char logical[512];
+    for (int k = 0; k < g_s.nfiles; ++k) {
+        char** lines = nullptr; int nl = 0; bool exists = false;
+        if (!read_file(k, &lines, &nl, &exists)) return false;
+        if (!exists) continue;
+        g_s.file_map = g_s.cur_map = g_s.file_maps[k];
+        for (int i = 0; i < nl;) {
+            int line_no;
+            i = logical_line(lines, nl, i, logical, sizeof logical, &line_no);
+            g_s.line = line_no;
+            if (!logical[0]) continue;
+            if (logical[0] == '|') return fail("a '|' continuation line must follow a choice");
+            if (!stmt(logical)) return false;
+        }
+        g_s.line = nl;
+        if (!close_script()) return false;
+    }
     // label and call fixups
     for (int k = 0; k < g_s.nfix; ++k) {
         const Fixup& f = g_s.fix[k];
@@ -804,15 +1258,14 @@ bool script_load(const char* map_name) {
         g_s.line = 0;
         if (!check_fall_off(d)) return false;
     }
-    static char mapf[40];
-    snprintf(mapf, sizeof mapf, "maps/%s.txt", map_name);
-    if (!link_map(mapf)) return false;
+    if (!link_maps()) return false;
     progress_bind_flags(g_pool.flags, g_pool.nflags);
+    script_set_map(script_map_find(map_name));
     g_loaded = true;
-    char msg[160];
+    char msg[200];
     const ScriptStats st = script_stats();
-    snprintf(msg, sizeof msg, "script: %s ok: %d scripts, %d ops, %d string bytes, %d condition bytes, %d flags, %d speakers; pools %d B static",
-             fname, g_pool.nscripts, g_pool.nops, g_pool.nstr, g_pool.ncond, g_pool.nflags, g_pool.nspeakers, st.pool_bytes);
+    snprintf(msg, sizeof msg, "script: %d files ok: %d scripts, %d ops, %d string bytes, %d condition bytes, %d flags, %d speakers, %d actors, %d maps; pools %d B static",
+             g_s.nfiles, g_pool.nscripts, g_pool.nops, g_pool.nstr, g_pool.ncond, g_pool.nflags, g_pool.nspeakers, g_pool.nactors, g_pool.nmaps, st.pool_bytes);
     eng::dbg_print(msg);
     return true;
 }
@@ -863,11 +1316,7 @@ static void hex(char* out, const uint8_t* b, int n) {
     out[2 * n] = '\0';
 }
 
-static const char* actor_name(int a) {
-    if (a == 0) return "rowan";
-    const FieldState& f = field_state();
-    return (a - 1 < f.ents.size()) ? f.ents[a - 1].id : "?";
-}
+static const char* actor_name(int a) { return script_actor_name(a); }
 
 void script_dump(void (*out)(const char*, void*), void* ctx) {
     char line[700], q[560], h[80];
@@ -887,13 +1336,16 @@ void script_dump(void (*out)(const char*, void*), void* ctx) {
     for (int i = 0; i < g_pool.nmarkers; ++i) {
         const Marker& m = g_pool.markers[i];
         hex(h, g_pool.cond + m.cond, m.cond_len);
-        snprintf(line, sizeof line, "marker %s %s %s", actor_name(1 + m.entity), m.kind == MARK_QUEST ? "!" : "...", h);
+        snprintf(line, sizeof line, "marker %s %s %s %s", g_pool.maps[m.map], g_s.scan[m.map].ent_id[m.entity], m.kind == MARK_QUEST ? "!" : "...", h);
         out(line, ctx);
     }
+    n = snprintf(line, sizeof line, "actors %d", g_pool.nactors);
+    for (int i = 0; i < g_pool.nactors; ++i) n += snprintf(line + n, sizeof line - (size_t)n, " %s", g_pool.actors[i]);
+    out(line, ctx);
     const anim::Library* L = anim::shared_library();
     for (int si = 0; si < g_pool.nscripts; ++si) {
         const ScriptDef& d = g_pool.scripts[si];
-        snprintf(line, sizeof line, "script %d %s %d %d", si, d.name, d.first, d.end);
+        snprintf(line, sizeof line, "script %d %s %d %d %s%s", si, d.name, d.first, d.end, g_pool.maps[d.map], d.skip ? " skip" : "");
         out(line, ctx);
         for (int pc = d.first; pc < d.end; ++pc) {
             const ScrOp& o = g_pool.ops[pc];
@@ -921,6 +1373,22 @@ void script_dump(void (*out)(const char*, void*), void* ctx) {
             case SC_EMOTE: snprintf(line + n, sizeof line - (size_t)n, " %s %s", actor_name(o.a), EMOTE_NAMES[o.b % EMOTE_COUNT]); break;
             case SC_WAIT: case SC_FADE_OUT: case SC_FADE_IN: snprintf(line + n, sizeof line - (size_t)n, " %d", o.b); break;
             case SC_LETTERBOX: snprintf(line + n, sizeof line - (size_t)n, " %s", o.a ? "on" : "off"); break;
+            case SC_MOVE:
+                snprintf(line + n, sizeof line - (size_t)n, " %s %d %d%s%s", actor_name(o.a), (int)(int8_t)(o.b & 0xFF), (int)(int8_t)(o.b >> 8),
+                         (o.c & MOVE_REL) ? " rel" : "", (o.c & MOVE_RUN) ? " run" : "");
+                break;
+            case SC_PLACE: snprintf(line + n, sizeof line - (size_t)n, " %s %d %d %s", actor_name(o.a), o.b & 0xFF, o.b >> 8, DIR_NAMES[o.c & 3]); break;
+            case SC_CAM: snprintf(line + n, sizeof line - (size_t)n, " %s %d", o.a == CAM_FIELD ? "field" : g_pool.shots[o.c % MAX_MAPS][o.a % MAX_SHOTS], o.b); break;
+            case SC_PAR: snprintf(line + n, sizeof line - (size_t)n, " %d", o.a); break;
+            case SC_BATTLE: snprintf(line + n, sizeof line - (size_t)n, " %s%s", actor_name(o.a), o.b ? " boss" : ""); break;
+            case SC_MAP:
+                snprintf(line + n, sizeof line - (size_t)n, " %s %d %d %s %s", g_pool.maps[o.a % MAX_MAPS], o.b & 0xFF, o.b >> 8, DIR_NAMES[o.c & 3],
+                         (o.c >> 4) ? light_get((o.c >> 4) - 1).name : "-");
+                break;
+            case SC_LIGHT: snprintf(line + n, sizeof line - (size_t)n, " %s", light_get(o.a).name); break;
+            case SC_LIGHT_LERP: snprintf(line + n, sizeof line - (size_t)n, " %s %s %d", light_get(o.a).name, light_get(o.c).name, o.b); break;
+            case SC_NAMECARD: case SC_CARD: quoted(q, sizeof q, g_pool.str + o.str); snprintf(line + n, sizeof line - (size_t)n, " %s %d", q, o.b); break;
+            case SC_TRANSITION: snprintf(line + n, sizeof line - (size_t)n, " T%d", o.a); break;
             default: break;
             }
             out(line, ctx);
@@ -940,6 +1408,22 @@ int  script_blocking_pc() { return g_vm.block; }
 int  script_timer() { return g_vm.timer; }
 void script_abort() { g_vm.script = -1; g_vm.block = -1; g_vm.timer = 0; g_vm.sp = 0; }
 
+static bool host_op(uint8_t code) {
+    return code == SC_MOVE || code == SC_CAM || code == SC_PAR || code == SC_BATTLE || code == SC_MAP || code == SC_NAMECARD ||
+           code == SC_CARD || code == SC_TRANSITION || code == SC_CREDITS || code == SC_RESULTS;
+}
+bool script_waiting_host() { return g_vm.script >= 0 && g_vm.block >= 0 && host_op(g_pool.ops[g_vm.block].code); }
+
+static int script_at(int pc) {
+    for (int i = 0; i < g_pool.nscripts; ++i) if (pc >= g_pool.scripts[i].first && pc < g_pool.scripts[i].end) return i;
+    return -1;
+}
+bool script_skippable() {
+    if (g_vm.script < 0) return false;
+    const int s = script_at(g_vm.block >= 0 ? g_vm.block : g_vm.pc);
+    return s >= 0 && g_pool.scripts[s].skip;
+}
+
 static void vm_error(const char* what) {
     char m[120];
     snprintf(m, sizeof m, "script: %s in %s at op %d - script stopped", what,
@@ -949,6 +1433,39 @@ static void vm_error(const char* what) {
 }
 
 static void changed() { if (g_host.progress_changed) g_host.progress_changed(); }
+
+// An actor slot as the host sees it: 0 = Rowan, 1 + i = entity i of the current map, -1 = not on this map.
+static int host_actor(int slot) {
+    if (slot == 0) return 0;
+    const int e = script_actor_entity(slot);
+    return e < 0 ? -1 : 1 + e;
+}
+
+// The actor commands that may also run inside a parallel line. Returns the ticks the command keeps the line busy
+// by itself (a camera ease, a wait); moves report through the host's busy().
+static int actor_cmd(const ScrOp& o) {
+    switch (o.code) {
+    case SC_FACE: {
+        const int a = host_actor(o.a);
+        if (a < 0 || !g_host.face) return 0;
+        if (o.b & 0x100) { const int t = host_actor(o.b & 0xFF); if (t >= 0) g_host.face(a, 0x100 | t); }
+        else g_host.face(a, o.b);
+        return 0;
+    }
+    case SC_ANIM: { const int a = host_actor(o.a); if (a >= 0 && g_host.anim) g_host.anim(a, o.b); return 0; }
+    case SC_EMOTE: { const int a = host_actor(o.a); if (a >= 0 && g_host.emote) g_host.emote(a, o.b); return 0; }
+    case SC_MOVE: {
+        const int a = host_actor(o.a);
+        if (a >= 0 && g_host.move) g_host.move(a, (int)(int8_t)(o.b & 0xFF), (int)(int8_t)(o.b >> 8), o.c);
+        return 0;
+    }
+    case SC_CAM:
+        if (g_host.cam) g_host.cam(o.a == CAM_FIELD ? -1 : (o.c == g_map ? o.a : -1), o.b);
+        return o.b;
+    case SC_WAIT: return o.b;
+    default: return 0;
+    }
+}
 
 // Runs from g_vm.pc until a blocking op or the end.
 static void vm_run() {
@@ -988,10 +1505,55 @@ static void vm_run() {
         case SC_HEAL: if (g_host.heal) g_host.heal(); break;
         case SC_CHECKPOINT: if (g_host.checkpoint) g_host.checkpoint(o.a); break;
         case SC_OBJECTIVE: progress().objective = o.a; changed(); break;
-        case SC_FACE: if (g_host.face) g_host.face(o.a, o.b); break;
-        case SC_ANIM: if (g_host.anim) g_host.anim(o.a, o.b); break;
-        case SC_EMOTE: if (g_host.emote) g_host.emote(o.a, o.b); break;
+        case SC_FACE: case SC_ANIM: case SC_EMOTE: actor_cmd(o); break;
         case SC_LETTERBOX: if (g_host.letterbox) g_host.letterbox(o.a != 0); break;
+        // ---- slice 3D-6
+        case SC_PLACE: {
+            const int a = host_actor(o.a);
+            if (a >= 0 && g_host.place) g_host.place(a, o.b & 0xFF, o.b >> 8, o.c & 3);
+            break;
+        }
+        case SC_MOVE: case SC_CAM: {
+            const int t = actor_cmd(o);
+            g_vm.block = g_vm.pc; g_vm.timer = t;
+            return;
+        }
+        case SC_PAR: {
+            int t = 0;
+            for (int k = 1; k <= o.a; ++k) { const int tk = actor_cmd(g_pool.ops[g_vm.pc + k]); t = tk > t ? tk : t; }
+            g_vm.block = g_vm.pc; g_vm.timer = t;
+            return;
+        }
+        case SC_BATTLE: {
+            const int a = host_actor(o.a);
+            if (a <= 0 || !g_host.battle) { vm_error("battle: the enemy is not on this map"); return; }
+            g_vm.block = g_vm.pc; g_vm.timer = 0;
+            g_host.battle(a, o.b != 0);
+            return;
+        }
+        case SC_MAP:
+            g_vm.block = g_vm.pc; g_vm.timer = 0;
+            if (g_host.map) g_host.map(o.a, o.b & 0xFF, o.b >> 8, o.c & 3, (int)(o.c >> 4) - 1);
+            return;
+        case SC_LIGHT: if (g_host.light) g_host.light(o.a); break;
+        case SC_LIGHT_LERP: if (g_host.light_lerp) g_host.light_lerp(o.a, o.c, o.b); break;
+        case SC_NAMECARD: case SC_CARD:
+            g_vm.block = g_vm.pc; g_vm.timer = o.b;
+            if (o.code == SC_NAMECARD && g_host.namecard) g_host.namecard(g_pool.str + o.str, o.b);
+            if (o.code == SC_CARD && g_host.card) g_host.card(g_pool.str + o.str, o.b);
+            return;
+        case SC_TRANSITION:
+            g_vm.block = g_vm.pc; g_vm.timer = 0;
+            if (g_host.transition) g_host.transition(o.a);
+            return;
+        case SC_CREDITS: case SC_RESULTS:
+            g_vm.block = g_vm.pc; g_vm.timer = 0;
+            if (g_host.screen) g_host.screen(o.code == SC_CREDITS ? SCREEN_CREDITS : SCREEN_RESULTS);
+            return;
+        case SC_TITLE:
+            script_abort();
+            if (g_host.screen) g_host.screen(SCREEN_TITLE);
+            return;
         default: vm_error("bad op"); return;
         }
         ++g_vm.pc;
@@ -1009,8 +1571,15 @@ bool script_start(int script) {
 
 void script_tick() {
     if (g_vm.script < 0 || g_vm.block < 0) return;
-    const uint8_t code = g_pool.ops[g_vm.block].code;
-    if (code != SC_WAIT && code != SC_FADE_OUT && code != SC_FADE_IN) return;
+    const ScrOp& o = g_pool.ops[g_vm.block];
+    if (host_op(o.code)) {
+        if (g_vm.timer > 0) --g_vm.timer;
+        if (g_vm.timer > 0 || (g_host.busy && g_host.busy())) return;
+        g_vm.pc = g_vm.block + 1 + (o.code == SC_PAR ? o.a : 0); g_vm.block = -1; g_vm.timer = 0;
+        vm_run();
+        return;
+    }
+    if (o.code != SC_WAIT && o.code != SC_FADE_OUT && o.code != SC_FADE_IN) return;
     if (--g_vm.timer > 0) return;
     g_vm.pc = g_vm.block + 1; g_vm.block = -1; g_vm.timer = 0;
     vm_run();

@@ -1,0 +1,27 @@
+# The full playthrough (slice 3D-6, docs/NEXT_SLICE_BARROW.md 11 T1): title -> T2 -> intro -> the village half ->
+# Corwin -> the barrow -> the waystone -> T8 -> the Bone Warden -> the ending -> credits -> results -> T11 -> the title
+# with its crest. Run with --boot (the Dreamcast's start) and the smart battle bot.
+expect mode=title cleared=0
+newgame
+until field
+expect stage=0 objective=Speak_with_Wren map=village marker:wren=! pos=3,15
+choose 0
+talk wren
+expect stage=1 skill_fire=1 cp=1
+chase slime_a
+expect patrol_a=1
+chase slime_b
+expect patrol_b=1 stage=2 marker:wren=!
+talk wren
+expect stage=3 has_token=1 max_hp=30 hp=30 cp=2 marker:corwin=! objective=Show_the_token_to_Corwin
+talk brom
+expect potions=3
+talk corwin
+expect gate_open=1 stage=4 objective=Enter_the_Barrow
+exit east
+expect map=barrow stage=4 pos=2,7 marker:waystone=!
+talk waystone
+expect stage=5 cp=3 objective=Lay_the_Warden_to_rest
+goto 16 7
+until title
+expect mode=title cleared=1 stage=7 warden_down=1

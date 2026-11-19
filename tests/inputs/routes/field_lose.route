@@ -1,5 +1,5 @@
 # tests/inputs/field_lose.in (regenerated in slice 3D-5): walk into the road squad, lose (the bot only guards),
-# GAME OVER, retry (A), walk a little.
+# the death screen, retry (A; slice 3D-6), walk a little.
 policy guard
 chase slime_b
 wait 30

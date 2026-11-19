@@ -26,10 +26,16 @@ quiet "$BPY" tools/battle3d/convert_model.py --fbx "$KAYKIT/Characters/Mage.fbx"
     --tris 1100 --out "$B/wren.dmf" --report "$R/wren.json"
 quiet "$BPY" tools/battle3d/convert_model.py --fbx "$KAYKIT/Characters/Barbarian.fbx" --texture "$KAYKIT/Characters/barbarian_texture.png" \
     --tris 950 --out "$B/brom.dmf" --report "$R/brom.json"
+# slice 3D-6: Corwin (the Ranger), 1,000 triangles like Wren and Brom (tools/vs1art/build_chars.sh adds VS1's head)
+quiet "$BPY" tools/battle3d/convert_model.py --fbx "$KAYKIT/Characters/Ranger.fbx" --texture "$KAYKIT/Characters/ranger_texture.png" \
+    --tris 1000 --out "$B/corwin.dmf" --report "$R/corwin.json"
 
 # portraits: high-detail conversions of the same FBX (build products, decision D10), then the renderer
-for c in Knight:knight Mage:mage Barbarian:barbarian; do
+for c in Knight:knight Mage:mage Barbarian:barbarian Ranger:ranger; do
   quiet "$BPY" tools/battle3d/convert_model.py --fbx "$KAYKIT/Characters/${c%%:*}.fbx" --texture "$KAYKIT/Characters/${c##*:}_texture.png" \
       --tris 9000 --tex-size 512 --out "$HI/${c##*:}_hi.dmf" --report "$HI/${c##*:}_hi.json"
 done
+# slice 3D-6: the Bone Warden's portraits (the Skeleton Mage, his eyes in the barrow's purple)
+quiet "$BPY" tools/battle3d/convert_model.py --fbx "$KAYKIT/Characters/Skeleton_Mage.fbx" --texture "$KAYKIT/Characters/skeleton_texture.png" \
+    --tris 9000 --tex-size 512 --glow-color C890FF --out "$HI/skeleton_mage_hi.dmf" --report "$HI/skeleton_mage_hi.json"
 python3 tools/dialog/make_portraits.py --hi "$HI"

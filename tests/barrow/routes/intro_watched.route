@@ -1,0 +1,5 @@
+# The intro watched to its end (the reference for skip_intro.route).
+expect mode=title
+newgame
+until field
+expect stage=0 objective=Speak_with_Wren pos=3,15

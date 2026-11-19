@@ -1,0 +1,33 @@
+; credits.txt - the credits roll (slice 3D-6, GDD 14 E5): "# heading", a line of text, a blank line = a gap.
+; Lines starting with ';' are comments. Drawn with the dialog font, centred, over the village flyover.
+# PROJECT HYMN
+The Restless Dead
+A horizontal slice for the Sega Dreamcast
+
+# DESIGN AND PROGRAMMING
+The Project Hymn team
+
+# THE CAST
+Ser Rowan - the knight
+Wren - the village mage
+Brom - smith and innkeeper
+Corwin - the gate watch
+The Bone Warden
+
+# TOOLS
+KallistiOS
+DreamSDK
+SH4ZAM by gyrovorbis
+Blender
+
+# ART
+KayKit Adventurers, Skeletons and Animations
+by Kay Lousberg (CC0)
+Medieval Village MegaKit by Quaternius (CC0)
+Boulders and terrain noise from Poly Haven (CC0)
+Home Video font by GGBotNet (CC0)
+The VS1 lineage's art pipeline
+
+# THANK YOU
+For playing
+

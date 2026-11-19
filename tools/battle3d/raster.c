@@ -43,6 +43,15 @@ static inline void tex_sample(const uint8_t* tex, int tw, int th, float u, float
         }
 }
 
+/* Slice 3D-6: PVR table fog (linear in W = 1/z between start and end, towards rgb), applied to the triangles of
+ * the next raster_tris calls when on (render_frame.py: the 3D batches of a fogged frame); mode 3 multiplies the
+ * frame by the source colour (MAT_MULTIPLY). */
+static int g_fog_on = 0;
+static float g_fog_rgb[3], g_fog_start = 0, g_fog_end = 1;
+void raster_fog(int on, float r, float g, float b, float start, float end) {
+    g_fog_on = on; g_fog_rgb[0] = r; g_fog_rgb[1] = g; g_fog_rgb[2] = b; g_fog_start = start; g_fog_end = end > start ? end : start + 0.1f;
+}
+
 /* color: W*H*3 floats (0..255), depth: W*H floats (initialised to 0 = far) */
 void raster_tris(const RV* v, int ntris, const uint8_t* tex, int tw, int th, int bilinear, int mode, int cull,
                  float* color, float* depth, int W, int H) {
@@ -53,7 +62,8 @@ void raster_tris(const RV* v, int ntris, const uint8_t* tex, int tw, int th, int
         float area = edge(a->x, a->y, b->x, b->y, c->x, c->y);
         if (fabsf(area) < 1e-8f) continue;
         /* screen y is down: counter-clockwise on screen (front, render3d.h) has area < 0 here */
-        if (cull && area > 0) continue;
+        if (cull == 1 && area > 0) continue;
+        if (cull == 2 && area < 0) continue;           /* cull front faces (MAT_CULL_FRONT: the outline hull) */
         float minx = fminf(a->x, fminf(b->x, c->x)), maxx = fmaxf(a->x, fmaxf(b->x, c->x));
         float miny = fminf(a->y, fminf(b->y, c->y)), maxy = fmaxf(a->y, fmaxf(b->y, c->y));
         int x0 = (int)floorf(minx), x1 = (int)ceilf(maxx), y0 = (int)floorf(miny), y1 = (int)ceilf(maxy);
@@ -93,8 +103,15 @@ void raster_tris(const RV* v, int ntris, const uint8_t* tex, int tw, int th, int
                 } else {
                     for (int k = 0; k < 4; ++k) src[k] = col[k];
                 }
+                if (g_fog_on && mode != 3) {
+                    float f = (1.0f / (z > 1e-6f ? z : 1e-6f) - g_fog_start) / (g_fog_end - g_fog_start);
+                    f = f < 0 ? 0 : (f > 1 ? 1 : f);
+                    for (int k = 0; k < 3; ++k) src[k] = mode == 2 ? src[k] * (1 - f) : src[k] * (1 - f) + g_fog_rgb[k] * f;
+                }
                 float* d = color + 3 * idx;
-                if (mode == 0) {
+                if (mode == 3) {
+                    for (int k = 0; k < 3; ++k) d[k] = d[k] * src[k] / 255.0f;
+                } else if (mode == 0) {
                     d[0] = src[0]; d[1] = src[1]; d[2] = src[2];
                     depth[idx] = z;
                 } else if (mode == 1) {

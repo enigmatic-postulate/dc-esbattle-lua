@@ -15,7 +15,7 @@ from PIL import Image
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = None
-OP, BLEND, ADD = 0, 1, 2
+OP, BLEND, ADD, MUL = 0, 1, 2, 3
 RV = np.dtype([('x', '<f4'), ('y', '<f4'), ('z', '<f4'), ('u', '<f4'), ('v', '<f4'), ('argb', '<u4')])
 
 
@@ -28,6 +28,7 @@ def _lib():
             subprocess.check_call(['cc', '-O2', '-shared', '-fPIC', src, '-o', so, '-lm'])
         _LIB = ctypes.CDLL(so)
         _LIB.raster_tris.restype = None
+        _LIB.raster_fog.restype = None
     return _LIB
 
 
@@ -49,7 +50,7 @@ class Canvas:
         else:
             tp, tw, th = None, 1, 1
         _lib().raster_tris(rv.ctypes.data_as(ctypes.c_void_p), ctypes.c_int(n), tp, ctypes.c_int(tw), ctypes.c_int(th),
-                           ctypes.c_int(1 if bilinear else 0), ctypes.c_int(mode), ctypes.c_int(1 if cull else 0),
+                           ctypes.c_int(1 if bilinear else 0), ctypes.c_int(mode), ctypes.c_int(int(cull)),
                            self.color.ctypes.data_as(ctypes.c_void_p), self.depth.ctypes.data_as(ctypes.c_void_p),
                            ctypes.c_int(self.w), ctypes.c_int(self.h))
 
@@ -60,6 +61,11 @@ class Canvas:
         for i, (px, py, u, v) in enumerate(pts):
             q[i] = (px, py, z, u, v, argb)
         self.tris(q, tex, bilinear, mode, False)
+
+    def fog(self, on, rgb=0, start=0.0, end=1.0):
+        """slice 3D-6: PVR table fog for the following tris() (W between start and end, towards rgb)"""
+        _lib().raster_fog(ctypes.c_int(1 if on else 0), ctypes.c_float((rgb >> 16) & 255), ctypes.c_float((rgb >> 8) & 255),
+                          ctypes.c_float(rgb & 255), ctypes.c_float(start), ctypes.c_float(end))
 
     def image(self):
         return Image.fromarray(np.clip(self.color + 0.5, 0, 255).astype(np.uint8))

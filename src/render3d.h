@@ -42,7 +42,38 @@ struct ModelGfx {
     const dmf::Model* m;
     eng::Material single[dmf::MAX_MATERIALS], doubled[dmf::MAX_MATERIALS];
     const float* strip_spheres;   // static models: x, y, z, r per strip (model space), for culling
+    bool hull_ok;                 // cel prototype: gfx_init wrote each vertex's welded normal (the normal averaged over
+                                  // every vertex at the same position, so the outline hull has no cracks at hard edges)
+                                  // into the vertex's 4 pad bytes (x, y, z as int8) - no extra RAM, same cache line
+    const ModelGfx* hull;         // cel prototype: a decimated hull mesh (romdisk/models/hull/<name>.dmf, same skeleton,
+                                  // tools/cel/hull_lab.py) drawn instead of the full model when cel().lod is on
 };
+
+// ---- Cel-shading feasibility prototype (docs/CEL_SHADING_STUDY.md). Everything is off by default: the game draws
+// exactly as before unless `outline_px` or `toon` is set (host: --tune cel_outline_px=1.5 ...; KOS: make CEL=1).
+//   outline: an inverted hull - the model again, every vertex pushed out along its welded normal by `outline_px`
+//            pixels (at the model's depth), untextured in `outline_argb`, FRONT faces culled (MAT_CULL_FRONT), so
+//            only the rim that sticks out behind the silhouette shows. Costs one more transform + strip copy per
+//            vertex of every outlined model.
+//   toon:    banded lighting - n.l snapped to 3 levels (shadow / mid / lit) before ambient + diffuse. Applied where
+//            lighting is computed (per frame, or baked at load / per yaw bucket): no extra per-frame cost.
+struct CelParams {
+    float outline_px;        // outline width in pixels (0 = off)
+    float chars;             // 1 = characters (and their weapons) get outlines, 2 = the hero only
+    float props;             // 0 none, 1 = small static props (< PROP_MAX_VERTS vertices), 2 = every static prop
+    float toon;              // 1 = banded lighting
+    float band_lo, band_hi;  // n.l thresholds of the 3 bands
+    float outline_rgb;       // the outline colour as 0xRRGGBB in a float (tunable from the command line); 0 = black
+    float lod;               // 1 = draw a character's decimated hull mesh (ModelGfx::hull) when it has one
+    float zpush;             // hull depth push in world units (z = 1/(W + zpush)): hides a coarse hull poking through
+    float weapons;           // 1 = battle weapons get (full) hulls too
+};
+CelParams& cel();
+const int CEL_PROP_MAX_VERTS = 600;
+// Outlines for the draws that follow (the caller marks characters / props; cleared by stats_reset each frame).
+void cel_hull_next(bool characters, bool props);
+// Snaps n.l to the toon bands when cel().toon is on (identity otherwise).
+float cel_ndl(float ndl);
 bool gfx_init(ModelGfx* g, const dmf::Model& m, bool cull);
 
 // Skinned or rigid model, lit per vertex every frame. skin = per-bone skin matrices
@@ -97,7 +128,8 @@ void set_strip_culling(bool on);
 void set_near_strips(bool on);
 
 // Per-frame statistics (reset by stats_reset; read by DIAG builds and the host harness).
-struct Stats { int models, models_culled, statics, statics_culled, statics_near, strips_culled, tris, verts_xf, verts_out; };
+struct Stats { int models, models_culled, statics, statics_culled, statics_near, strips_culled, tris, verts_xf, verts_out;
+               int hull_models, hull_xf, hull_out; };   // cel prototype: outline hulls drawn, their transforms and written vertices
 void stats_reset();
 const Stats& stats();
 void stats_add(int verts_out, int tris);   // geometry written by callers straight into the arena

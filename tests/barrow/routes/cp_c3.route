@@ -1,0 +1,28 @@
+# Death and retry at C3 (docs/NEXT_SLICE_BARROW.md 11 T4): lose to the Warden (the bot only guards), the death screen, RETRY:
+# back at the waystone (the barrow, C3, byte for byte), full HP, and the boss intro runs at once in its short form (the
+# retry goes from the death screen straight into its dialog); the
+# second fight is won and the ending runs.
+expect mode=title
+newgame
+until field
+choose 0
+talk wren
+chase slime_a
+chase slime_b
+talk wren
+talk brom
+choose 0
+talk brom
+talk corwin
+exit east
+talk waystone
+expect stage=5 cp=3 map=barrow
+policy guard
+goto 16 7
+until death
+until dialog
+until to_battle
+expect retries=1 stage=5 cp=3 map=barrow hp=30 at_cp=1 warden_down=0
+policy boss:good:1
+until title
+expect mode=title cleared=1 warden_down=1 retries=1

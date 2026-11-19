@@ -7,7 +7,8 @@ SRC_OBJS = src/ai.o src/anim.o src/arena.o src/assets.o src/battle.o src/battle3
            src/field3d.o src/font.o src/fx.o src/game.o src/hpbar.o src/icons.o src/input.o \
            src/input_probe.o src/models.o src/presentation.o src/render3d.o src/skills.o src/status.o \
            src/targeting.o src/turn_system.o src/ui.o \
-           src/dialog_ui.o src/portrait.o src/progress.o src/script.o src/text.o
+           src/dialog_ui.o src/portrait.o src/progress.o src/script.o src/text.o \
+           src/lights.o src/screens.o src/transitions.o src/uitext.o
 OBJS = platform/kos/main.o $(SRC_OBJS) romdisk.o
 
 # romdisk/: PNGs, maps/ and models/*.dmf (rebuild models with tools/dmf/build_models.sh)
@@ -70,6 +71,18 @@ endif
 # plain RGB565 (512 KiB of VRAM instead of 66) - the fallback if the ground ever shows scrambled blocks (TRIAGE.md)
 ifdef GROUND_NO_VQ
 KOS_CFLAGS += -DGROUND_NO_VQ=1
+endif
+
+# Slice 3D-6: the barrow's PVR table fog. make NO_FOG=1 never turns it on (TRIAGE.md: if the fog looks wrong on
+# hardware); the night light preset reads without it.
+ifdef NO_FOG
+KOS_CFLAGS += -DNO_FOG=1
+endif
+# Cel-shading feasibility prototype (docs/CEL_SHADING_STUDY.md), hardware test builds: make CEL=1 = banded (toon)
+# lighting + 2 px inverted-hull outlines (romdisk/models/hull/*.dmf) on every character; make CEL=2 = the same on the
+# hero only. The default build draws exactly as before. make clean first (make does not track flag changes).
+ifdef CEL
+KOS_CFLAGS += -DCEL_DEFAULT=$(CEL)
 endif
 
 # Debug pad overlay (top left, over the objective HUD): on in DIAG builds, or make INPUT_OVERLAY=1

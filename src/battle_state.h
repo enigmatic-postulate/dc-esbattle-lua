@@ -141,6 +141,9 @@ struct BossState {
 enum class BattleState : uint8_t { Command, Resolve, Animate, TurnAdvance, Win, Lose };
 enum class BattleOutcome : uint8_t { None, Won, Lost };
 
+// Slice 3D-6: what the results card counts (GDD 14 E6), summed by the rules as they resolve (deterministic).
+struct BattleTally { int hero_turns = 0, dmg_dealt = 0, dmg_taken = 0, potions_used = 0; };
+
 struct BattleCtx {
     BattleState state = BattleState::Command;
     FixedVec<Actor, MAX_ACTORS> actors;   // storage; Actor* into here are stable
@@ -160,6 +163,10 @@ struct BattleCtx {
     int           potions = 0;                 // the hero's potions (GDD 11.1), from/to PartyState
     uint32_t      skills = 0;                  // SKILL_* learned (party.h), from PartyState (slice 3D-5)
     BossState     boss;
+    // slice 3D-6 (game flow): a lost battle ends by itself (the death screen takes over: no DEFEAT banner, no A);
+    // the boss's win ends by itself after its banner (GDD 14 E1). Both off in --battle-test runs (the old flow).
+    bool          auto_lose = false, auto_win = false;
+    BattleTally   tally;
 
     BattleCtx() {}
     BattleCtx(const BattleCtx&) = delete;             // Actor* must stay valid

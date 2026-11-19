@@ -1,0 +1,15 @@
+# Death -> RETURN TO TITLE (GDD 13): lose the road squad (the bot only guards), choose the title (T11); the session is gone:
+# a new game starts from S0 again.
+expect mode=title
+newgame
+until field
+choose 0
+talk wren
+death title
+policy guard
+chase slime_b
+until title
+expect mode=title cleared=0
+newgame
+until field
+expect stage=0 objective=Speak_with_Wren map=village retries=0

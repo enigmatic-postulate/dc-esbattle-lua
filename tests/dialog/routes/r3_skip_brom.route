@@ -1,7 +1,7 @@
-# Route 3: skip Brom - reach S3; the Warden appears. His fight is not asserted (no potions: finding 5).
+# Route 3: skip Brom - reach S3; Corwin wants the token (slice 3D-6). The Warden's fight is not asserted (no potions: finding 5).
 choose 0
 talk wren
 chase slime_a
 chase slime_b
 talk wren
-expect stage=3 has_token=1 max_hp=30 visible:warden=1 talked_brom=0 potions=0 marker:brom=...
+expect stage=3 has_token=1 max_hp=30 marker:corwin=! talked_brom=0 potions=0 marker:brom=...

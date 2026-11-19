@@ -25,8 +25,18 @@
 //   expect <key>=<value>... checked when reached: stage potions max_hp hp mode retries objective
 //                           <flag>=0|1, visible:<id>=0|1, marker:<id>=!|...|-, pos=<x>,<y> (hero tile),
 //                           at_cp=1 (the hero on the last checkpoint's tile), cp=<id>
+//   slice 3D-6 (--boot runs; the frame around the game):
+//   newgame                 on the title: Start, then A on NEW GAME (the T2 card and the intro follow)
+//   title_credits           on the title: Start, down, A (the credits roll, then the title again)
+//   skip                    Start once, as soon as a skippable cutscene runs (or the credits roll)
+//   death retry|title       the next death screen's answer (default: retry)
+//   until <mode>            wait (pressing nothing, answering dialogs as usual) until the game is in that mode
+//   exit <id>               walk into the map's exit; ends on the other map (after T7 and the walk-in)
+//   goto also ends when a script starts on the way (a trigger: the road block, the boss ring)
+//   expect also knows: map=<name> cleared=0|1 transition=<Tn|->
 // In a dialog the driver presses A every other tick (it completes, then advances each page) and answers
-// choices from the queue, else from --choices (first | last | cancel | k,k,...). On GAME OVER it presses A.
+// choices from the queue, else from --choices (first | last | cancel | k,k,...). On the death screen it waits for the
+// options and presses A (retry) or down + A (title); on the results card A.
 #include "../../src/dialog_ui.h"
 #include "../../src/field.h"
 #include "../../src/field3d.h"
@@ -44,8 +54,9 @@ extern int      g_axis[2];
 
 namespace {
 
-enum Btn { B_UP = 1, B_DOWN = 2, B_LEFT = 4, B_RIGHT = 8, B_A = 16, B_B = 32, B_Y = 64 };
-enum StepKind { S_TALK, S_CHASE, S_GOTO, S_CHOOSE, S_POLICY, S_WAIT, S_PRESS, S_EXPECT, S_PACE, S_OPEN, S_MANUAL, S_HOLD, S_STICK };
+enum Btn { B_UP = 1, B_DOWN = 2, B_LEFT = 4, B_RIGHT = 8, B_A = 16, B_B = 32, B_Y = 64, B_START = 128 };
+enum StepKind { S_TALK, S_CHASE, S_GOTO, S_CHOOSE, S_POLICY, S_WAIT, S_PRESS, S_EXPECT, S_PACE, S_OPEN, S_MANUAL, S_HOLD, S_STICK,
+                S_NEWGAME, S_SKIP, S_DEATH, S_TITLE_CREDITS, S_UNTIL, S_EXIT };
 struct Step { StepKind kind; char arg[160]; int x, y; int line; };
 
 const int MAX_STEPS = 256;
@@ -72,6 +83,10 @@ FILE* g_trace_file = nullptr;
 int  g_tick = 0;
 char g_prev_mode[16] = "";
 int  g_battles = 0;
+bool g_death_title = false;                          // slice 3D-6: `death title` - the next death screen returns to the title
+int  g_death_t = 0;                                  // ticks on the death screen
+char g_exit_from[32] = "";                           // `exit`: the map the step started on
+int  g_prev_trans = 0;
 
 int entity_index(const char* id) {
     const bt::FieldState& f = bt::field_state();
@@ -194,6 +209,10 @@ bool check_expect(const char* kv) {
     else if (!strcmp(key, "cp")) snprintf(got, sizeof got, "%d", p.cp_id);
     else if (!strcmp(key, "objective")) { bt::game_objective_text(got, sizeof got); for (char* c = got; *c; ++c) if (*c == ' ') *c = '_'; }
     else if (!strcmp(key, "pos")) { int x, y; bt::field_hero_tile(&x, &y); snprintf(got, sizeof got, "%d,%d", x, y); }
+    else if (!strcmp(key, "map")) snprintf(got, sizeof got, "%s", bt::field_state().name);
+    else if (!strncmp(key, "walkable:", 9)) { int x = -1, y = -1; sscanf(key + 9, "%d,%d", &x, &y); snprintf(got, sizeof got, "%d", bt::cell_walkable(x, y) ? 1 : 0); }
+    else if (!strcmp(key, "cleared")) snprintf(got, sizeof got, "%d", bt::game_cleared() ? 1 : 0);
+    else if (!strcmp(key, "transition")) { const int t = bt::game_transition(); if (t) snprintf(got, sizeof got, "T%d", t); else snprintf(got, sizeof got, "-"); }
     else if (!strcmp(key, "at_cp")) { int x, y; bt::field_hero_tile(&x, &y); snprintf(got, sizeof got, "%d", x == p.cp_x && y == p.cp_y ? 1 : 0); }
     else if (!strncmp(key, "visible:", 8)) {
         const int i = entity_index(key + 8);
@@ -206,7 +225,7 @@ bool check_expect(const char* kv) {
         const bt::Marker* m = bt::script_markers(&nm);
         snprintf(got, sizeof got, "-");
         for (int k = 0; k < nm; ++k)
-            if (m[k].entity == i && bt::cond_eval(bt::script_cond(m[k].cond), m[k].cond_len, p)) { snprintf(got, sizeof got, "%s", m[k].kind == bt::MARK_QUEST ? "!" : "..."); break; }
+            if (bt::script_marker_here(m[k]) && m[k].entity == i && bt::cond_eval(bt::script_cond(m[k].cond), m[k].cond_len, p)) { snprintf(got, sizeof got, "%s", m[k].kind == bt::MARK_QUEST ? "!" : "..."); break; }
     } else {
         const int f = bt::progress_flag_index(key);
         if (f < 0) { snprintf(got, sizeof got, "?unknown-key"); }
@@ -299,6 +318,12 @@ bool story_load(const char* path) {
         else if (!strcmp(w, "pace")) { s.kind = S_PACE; s.x = atoi(rest); }
         else if (!strcmp(w, "open")) s.kind = S_OPEN;
         else if (!strcmp(w, "manual")) s.kind = S_MANUAL;
+        else if (!strcmp(w, "newgame")) s.kind = S_NEWGAME;
+        else if (!strcmp(w, "title_credits")) s.kind = S_TITLE_CREDITS;
+        else if (!strcmp(w, "skip")) s.kind = S_SKIP;
+        else if (!strcmp(w, "death")) s.kind = S_DEATH;
+        else if (!strcmp(w, "until")) s.kind = S_UNTIL;
+        else if (!strcmp(w, "exit")) s.kind = S_EXIT;
         else if (!strcmp(w, "hold")) { s.kind = S_HOLD; char b[16]; if (sscanf(rest, "%15s %d", b, &s.x) != 2) { fprintf(stderr, "%s:%d: hold <button> <ticks>\n", path, ln); fclose(f); return false; } snprintf(s.arg, sizeof s.arg, "%s", b); }
         else if (!strcmp(w, "stick")) { s.kind = S_STICK; if (sscanf(rest, "%d %d %d", &s.x, &s.y, &s.line) != 3) { fprintf(stderr, "%s:%d: stick <x> <y> <ticks>\n", path, ln); fclose(f); return false; } }
         else { fprintf(stderr, "%s:%d: unknown step %s\n", path, ln, w); fclose(f); return false; }
@@ -333,13 +358,85 @@ uint32_t story_buttons(int* ax, int* ay) {
     const bool manual_step = g_manual && g_si < g_nsteps &&
         (g_steps[g_si].kind == S_PRESS || g_steps[g_si].kind == S_HOLD || g_steps[g_si].kind == S_STICK ||
          g_steps[g_si].kind == S_WAIT || g_steps[g_si].kind == S_EXPECT);
+    // slice 3D-6: steps that only set something up run in any mode
+    if (g_si < g_nsteps && g_steps[g_si].kind == S_WAIT && md == bt::GameMode::Title) {   // slice 3D-6: the title's idle
+        if (g_t >= g_steps[g_si].x) next_step();
+        g_prev_press = 0;
+        return 0;
+    }
+    while (g_si < g_nsteps && (g_steps[g_si].kind == S_DEATH || g_steps[g_si].kind == S_POLICY || g_steps[g_si].kind == S_PACE ||
+                               g_steps[g_si].kind == S_CHOOSE)) {
+        Step& s = g_steps[g_si];
+        if (s.kind == S_DEATH) g_death_title = !strcmp(s.arg, "title");
+        else if (s.kind == S_POLICY) bot_init(s.arg);
+        else if (s.kind == S_PACE) g_pace = s.x;
+        else {
+            char buf[160];
+            snprintf(buf, sizeof buf, "%s", s.arg);
+            for (char* t = strtok(buf, " "); t && g_nq < 64; t = strtok(nullptr, " ")) g_queue[g_nq++] = !strcmp(t, "cancel") ? -1 : atoi(t);
+        }
+        next_step();
+    }
+    if (md != bt::GameMode::Death) g_death_t = 0;
+    // slice 3D-6: a chase whose battle was lost and left for the title (the death screen's RETURN TO TITLE) is over
+    if (g_si < g_nsteps && g_steps[g_si].kind == S_CHASE && g_saw_battle && md == bt::GameMode::Title) next_step();
+    const StepKind cur = g_si < g_nsteps ? g_steps[g_si].kind : S_MANUAL;
+    if (cur == S_UNTIL && (!strcmp(g_steps[g_si].arg, bt::game_mode_name()) || (!strcmp(g_steps[g_si].arg, "attract") && bt::game_attract())))
+        next_step();
+    if (bt::game_attract()) {                                         // slice 3D-6: the demo plays itself; a press would end it
+        if (g_si < g_nsteps && g_steps[g_si].kind == S_PRESS) { const uint32_t b = button_of(g_steps[g_si].arg); next_step(); g_prev_press = 1; return b; }
+        g_prev_press = 0;
+        return 0;
+    }
+
+    if (g_si < g_nsteps && g_steps[g_si].kind == S_EXPECT && md != bt::GameMode::Field && md != bt::GameMode::Dialog &&
+        md != bt::GameMode::Battle && !manual_step) {
+        char buf[160];                                                // expectations outside the field (the title, results)
+        snprintf(buf, sizeof buf, "%s", g_steps[g_si].arg);
+        for (char* t = strtok(buf, " "); t; t = strtok(nullptr, " ")) check_expect(t);
+        next_step();
+        g_prev_press = 0;
+        return 0;
+    }
+    if (md == bt::GameMode::Title) {
+        static int ready = 0;                                        // ticks the title has taken input (T1 over, the logo in)
+        ready = bt::game_transition() ? 0 : ready + 1;
+        if ((cur == S_NEWGAME || cur == S_TITLE_CREDITS) && ready > 50) {   // Start (opens the menu), [down], A
+            if (g_phase == 0 && g_prev_press == 0) { btn = B_START; g_phase = 1; g_t = 0; }
+            else if (g_phase == 1 && g_t > 20) { if (cur == S_TITLE_CREDITS) btn = B_DOWN; g_phase = 2; g_t = 0; }
+            else if (g_phase == 2 && g_t > 4) { btn = B_A; next_step(); }
+        }
+        g_prev_press = btn ? 1 : 0;
+        return btn;
+    }
+    if (md == bt::GameMode::Credits) {
+        if (cur == S_SKIP && g_t > 30 && g_prev_press == 0) { btn = B_START; next_step(); }
+        g_prev_press = btn ? 1 : 0;
+        return btn;
+    }
+    if (md == bt::GameMode::Results) {
+        btn = (g_prev_press == 0 && (g_t % 8) == 0) ? B_A : 0;
+        g_prev_press = btn ? 1 : 0;
+        return btn;
+    }
+    if (md == bt::GameMode::Card || md == bt::GameMode::MapChange) { g_prev_press = 0; return 0; }
+    if (md == bt::GameMode::Dialog && cur == S_SKIP && bt::script_skippable() && g_prev_press == 0 && bt::game_transition() == 0 &&
+        !(bt::script_blocking_pc() >= 0 && bt::script_op(bt::script_blocking_pc()).code == bt::SC_CHOICE)) {
+        next_step();
+        g_prev_press = 1;
+        return B_START;
+    }
+    if (md == bt::GameMode::Dialog && cur == S_GOTO) next_step();   // slice 3D-6: a trigger's script ended the walk
     if (md == bt::GameMode::Dialog && !g_manual) {
         g_saw_dialog = true;
         btn = drive_dialog();
     } else if (md == bt::GameMode::Dialog && !manual_step) {
         g_saw_dialog = true;                                         // manual: nothing pressed between steps
-    } else if (md == bt::GameMode::GameOver && !manual_step) {
-        btn = (g_prev_press == 0 && (g_t % 4) == 0) ? B_A : 0;
+    } else if (md == bt::GameMode::Death && !manual_step) {
+        // the options take input from tick 160 (GDD 13): retry = A; title = down, then A
+        ++g_death_t;
+        if (g_death_title && g_death_t == 170) btn = B_DOWN;
+        else if (g_death_t >= 176 && g_prev_press == 0 && (g_death_t % 4) == 0) { btn = B_A; if (g_death_title) g_death_title = false; }
     } else if ((md == bt::GameMode::Field || manual_step) && g_si < g_nsteps) {
         Step& s = g_steps[g_si];
         switch (s.kind) {
@@ -373,6 +470,25 @@ uint32_t story_buttons(int* ax, int* ay) {
             else next_step();
             break;
         case S_MANUAL: g_manual = true; next_step(); break;
+        case S_NEWGAME: case S_SKIP: case S_DEATH: case S_TITLE_CREDITS: case S_UNTIL: break;   // slice 3D-6: other modes
+        case S_EXIT: {
+            const bt::FieldState& f = bt::field_state();
+            if (g_phase == 0) { snprintf(g_exit_from, sizeof g_exit_from, "%s", f.name); g_phase = 1; }
+            if (strcmp(g_exit_from, f.name)) { next_step(); break; }           // arrived on the other map
+            int e = -1;
+            for (int i = 0; i < f.exits.size(); ++i) if (!strcmp(f.exits[i].id, s.arg)) e = i;
+            if (e < 0) { report("exit %s: no such exit on this map%s", s.arg, ""); ++g_fail; next_step(); break; }
+            const bt::Exit& x = f.exits[e];
+            if (g_t - g_last_plan > 60 || g_plen == 0) {
+                g_last_plan = g_t;
+                if (!plan([&](int tx, int ty) { return tx >= x.x && tx < x.x + x.w && ty >= x.y && ty < x.y + x.h; }, -1)) {
+                    report("exit %s unreachable (closed?)%s", s.arg, ""); ++g_fail; next_step(); break;
+                }
+            }
+            if (follow(ax, ay)) steer_to(x.x + x.w * 0.5f, x.y + x.h * 0.5f, ax, ay);   // push on into the exit
+            if (g_t > 3000) { report("exit %s timed out%s", s.arg, ""); ++g_fail; next_step(); }
+            break;
+        }
         case S_OPEN: {
             const int npc = entity_index(s.arg);
             if (npc < 0) { report("open %s: no such entity%s", s.arg, ""); ++g_fail; next_step(); break; }
@@ -399,7 +515,7 @@ uint32_t story_buttons(int* ax, int* ay) {
                 const int gx = s.x, gy = s.y;
                 if (!plan([&](int x, int y) { return x == gx && y == gy; }, -1)) { report("line %s: goto %s unreachable", "", s.arg); ++g_fail; next_step(); break; }
             }
-            if (follow(ax, ay)) next_step();
+            if (follow(ax, ay) || g_saw_dialog) next_step();            // slice 3D-6: a trigger's script ends it too
             if (g_t > 3000) { report("goto %s timed out%s", s.arg, ""); ++g_fail; next_step(); }
             break;
         }
@@ -476,13 +592,13 @@ void story_trace(FILE* t, int tick) {
     for (int i = 0; i < bt::progress_flag_count(); ++i)
         if (bt::progress_flag(i)) { n += snprintf(q + n, sizeof q - (size_t)n, "%s%s", any ? "," : "", bt::progress_flag_name(i)); any = true; }
     if (!any) n += snprintf(q + n, sizeof q - (size_t)n, "-");
-    n += snprintf(q + n, sizeof q - (size_t)n, " defeated=%x cp=%d@%d,%d,%s retries=%d objective=\"%s\" markers=", p.defeated, p.cp_id, p.cp_x, p.cp_y,
+    n += snprintf(q + n, sizeof q - (size_t)n, " map=%d defeated=%x,%x cp=%d@%d,%d,%s retries=%d objective=\"%s\" markers=", p.map, p.defeated[0], p.defeated[1], p.cp_id, p.cp_x, p.cp_y,
                   bt::dir_name((bt::Dir)p.cp_dir), bt::game_retries(), obj);
     int nm = 0;
     const bt::Marker* m = bt::script_markers(&nm);
     bool anym = false;
     for (int k = 0; k < nm; ++k)
-        if (bt::cond_eval(bt::script_cond(m[k].cond), m[k].cond_len, p)) {
+        if (bt::script_marker_here(m[k]) && bt::cond_eval(bt::script_cond(m[k].cond), m[k].cond_len, p)) {
             n += snprintf(q + n, sizeof q - (size_t)n, "%s%s:%s", anym ? "," : "", bt::field_state().ents[m[k].entity].id, m[k].kind == bt::MARK_QUEST ? "!" : "...");
             anym = true;
         }
@@ -499,7 +615,18 @@ void story_trace(FILE* t, int tick) {
     snprintf(q + n, sizeof q - (size_t)n, " mode=%s", bt::game_mode_name());
     if (strcmp(q, g_last_q)) { fprintf(t, "Q %d %s\n", tick, q); snprintf(g_last_q, sizeof g_last_q, "%s", q); }
     fprintf(t, "I %d %02x %d %d\n", tick, (unsigned)g_buttons, g_axis[0], g_axis[1]);   // this tick's input
+    const int tr = bt::game_transition();
+    if (tr != g_prev_trans) {                                         // slice 3D-6: each transition's start and end tick
+        if (g_prev_trans) fprintf(t, "T %d end T%d\n", tick, g_prev_trans);
+        if (tr) fprintf(t, "T %d start T%d\n", tick, tr);
+        g_prev_trans = tr;
+    }
     const char* md = bt::game_mode_name();
+    if (strcmp(md, g_prev_mode) && !strcmp(md, "results")) {     // slice 3D-6: what the results card shows
+        const bt::SessionStats& st = bt::game_stats();
+        fprintf(t, "R %d play_ticks=%d battles_won=%d hero_turns=%d dmg_dealt=%d dmg_taken=%d potions_used=%d retries=%d rank=%d\n", tick,
+                st.play_ticks, st.battles_won, st.hero_turns, st.dmg_dealt, st.dmg_taken, st.potions_used, st.retries, (int)bt::results_rank(st));
+    }
     if (strcmp(md, g_prev_mode)) {
         if (!strcmp(md, "battle")) ++g_battles;
         fprintf(t, "N %d %s\n", tick, md);
@@ -513,12 +640,14 @@ void story_trace(FILE* t, int tick) {
         const int p1 = bt::portrait_loaded(1, &pv1);
         const int sp = bt::script_blocking_pc();
         fprintf(t, "G %d btn=%02x sy=%d open=%d closing=%d t=%d bars=%d cam=%d box=%d pc=%d op=%s page=%d shown=%d/%d pause=%d complete=%d marker=%d "
-                   "choice=%d sel=%d opts=%d cancel=%d spk=%d var=%d slot=%d slide=%d port=%d slots=%d.%d,%d.%d uploads=%d fade=%d prompt=%d hud=%d\n",
+                   "choice=%d sel=%d opts=%d cancel=%d spk=%d var=%d slot=%d slide=%d port=%d slots=%d.%d,%d.%d uploads=%d fade=%d prompt=%d hud=%d npc=%d\n",
                 tick, (unsigned)g_buttons, g_axis[1], d.open, d.closing, d.t, d.bars, d.cam_w1000, d.box, sp,
                 sp >= 0 ? (bt::script_op(sp).code == bt::SC_PAGE ? "page" : bt::script_op(sp).code == bt::SC_SYS ? "sys" :
-                           bt::script_op(sp).code == bt::SC_CHOICE ? "choice" : bt::script_op(sp).code == bt::SC_WAIT ? "wait" : "fade") : "-",
+                           bt::script_op(sp).code == bt::SC_CHOICE ? "choice" : bt::script_op(sp).code == bt::SC_WAIT ? "wait" :
+                           (bt::script_op(sp).code == bt::SC_FADE_OUT || bt::script_op(sp).code == bt::SC_FADE_IN) ? "fade" : "host") : "-",
                 d.page_pc, d.shown, d.total, d.pause, d.complete, d.marker, d.choice_pc, d.sel, d.n_opts,
                 d.cancel == bt::NO_CANCEL ? -1 : d.cancel, d.speaker, d.variant, d.slot, d.slide, d.portrait_shown, p0, pv, p1, pv1,
-                bt::portrait_uploads(), d.fade, bt::field3d_info().prompt, bt::game_mode() == bt::GameMode::Field && !bt::dialog_hides_hud());
+                bt::portrait_uploads(), d.fade, bt::field3d_info().prompt, bt::game_mode() == bt::GameMode::Field && !bt::dialog_hides_hud(),
+                bt::dialog_npc());
     }
 }

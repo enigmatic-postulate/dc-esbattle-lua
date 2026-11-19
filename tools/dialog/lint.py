@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """lint.py - the script compiler in Python, and the GDD 7.4 validation (slice 3D-5, task C3).
 
-    python3 tools/dialog/lint.py [romdisk] [--map village] [--script FILE] [--dump] [--quiet]
+    python3 tools/dialog/lint.py [romdisk] [--script FILE [--as NAME]] [--dump] [--quiet]
 
-Compiles romdisk/scripts/<map>.txt + speakers.txt exactly as src/script.cpp does (the same pools, the same
-wrapping with the real font metrics from romdisk/fonts/dialog.fnt, the same condition byte code), so that
---dump prints the same text as `battle_trace --dump-scripts` (tests/dialog: parity). Then checks:
+Compiles every script file (romdisk/maps/maps.txt: scripts/<map>.txt for each map, then the `scripts` files) +
+speakers.txt exactly as src/script.cpp does (the same pools, the same wrapping with the real font metrics from
+romdisk/fonts/dialog.fnt, the same condition byte code, the same actor slots), against every map's entities,
+triggers, exits, glows and shots (romdisk/maps/<map>.txt) and the light presets (romdisk/maps/lights.txt), so that
+--dump prints the same text as `battle_trace --dump-scripts` (tests/dialog: parity). --script FILE replaces
+scripts/<NAME>.txt (default village) - the negative fixtures. Then checks:
   * every label, script and actor reference exists; a choice has 1-3 options; the cancel option is last
   * every flag that is read (conditions, @marker, the map's `if`) is set somewhere (flag, give skill/token,
     or a map entity's `win`)
@@ -15,7 +18,8 @@ wrapping with the real font metrics from romdisk/fonts/dialog.fnt, the same cond
   * the branch walk: every path ends (no run off the end, no loop with no exit, no loop that never blocks)
   * a cancel ("no") branch shows a page before it ends: it tells the player how to come back (GDD 7.3)
   * the stage only moves forward: `set stage N` where the stage may already be above N is an error
-  * commands that are not in this slice (cam, move, battle, ...) are errors
+  * slice 3D-6: a script's actors, shots and battles belong to the map it runs on (its @map, then its `map`
+    commands); only move, anim, face, emote, cam and wait run in parallel; the credits file exists
 Exit status 0 when clean. Errors are printed as file:line: message.
 """
 import argparse
@@ -26,20 +30,21 @@ import sys
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')
 
 SC = ['END', 'PAGE', 'SYS', 'CHOICE', 'OPTION', 'JMP', 'JZ', 'CALL', 'STAGE', 'MAXHP', 'FLAG', 'UNFLAG', 'GIVE_POTIONS',
-      'TAKE_POTIONS', 'HEAL', 'CHECKPOINT', 'OBJECTIVE', 'FACE', 'ANIM', 'WAIT', 'EMOTE', 'FADE_OUT', 'FADE_IN', 'LETTERBOX']
+      'TAKE_POTIONS', 'HEAL', 'CHECKPOINT', 'OBJECTIVE', 'FACE', 'ANIM', 'WAIT', 'EMOTE', 'FADE_OUT', 'FADE_IN', 'LETTERBOX',
+      'MOVE', 'PLACE', 'CAM', 'PAR', 'BATTLE', 'MAP', 'LIGHT', 'LIGHT_LERP', 'NAMECARD', 'CARD', 'TRANSITION', 'CREDITS',
+      'RESULTS', 'TITLE']
+(S_MOVE, S_PLACE, S_CAM, S_PAR, S_BATTLE, S_MAP, S_LIGHT, S_LIGHT_LERP, S_NAMECARD, S_CARD, S_TRANSITION, S_CREDITS,
+ S_RESULTS, S_TITLE) = range(24, 38)
+MAX_MAPS, MAX_ACTORS, MAX_SHOTS, MAX_ENTITIES, MAX_TRIGGERS, MAX_EXITS, MAX_GLOWS, MAX_FILES = 4, 24, 12, 16, 8, 4, 6, 6
+MOVE_REL, MOVE_RUN, CAM_FIELD, NAMECARD_TICKS, CARD_TICKS = 1, 2, 0xFF, 120, 150
 VARIANTS = ['neutral', 'happy', 'worried']
 EMOTES = ['!', '?', '...', 'sweat', 'anger']
 DIRS = ['down', 'up', 'left', 'right']
-OUT_OF_SCOPE = ['cam', 'move', 'battle', 'map', 'light', 'namecard', 'card', 'credits', 'results', 'title', 'transition']
 C_PUSH, C_STAGE, C_POTIONS, C_MAXHP, C_FLAG, C_NOT, C_ADD, C_SUB, C_EQ, C_NE, C_LT, C_LE, C_GT, C_GE, C_AND, C_OR = range(1, 17)
 PAGE_WIDTH, PAGE_LINES, CHOICE_TEXT_MAX = 420, 3, 300
 MAX_OPS, STR_BYTES, COND_BYTES, MAX_SCRIPTS, MAX_LABELS, MAX_FLAGS = 1024, 12 * 1024, 1024, 32, 128, 32
 MAX_SPEAKERS, MAX_MARKERS, MAX_OBJECTIVES, COND_MAX = 8, 8, 32, 32
 CODES = ['{gold}', '{red}', '{grey}', '{/}']
-
-
-class LintError(Exception):
-    pass
 
 
 # ---------------------------------------------------------------------------- font metrics (dialog.fnt)
@@ -125,38 +130,131 @@ class Font:
         return ''.join(out), lines
 
 
-# ---------------------------------------------------------------------------- map entities
-def read_map(path):
-    ents = []
-    for ln in open(path).read().split('\n'):
-        if not ln.startswith('entity '):
-            continue
-        body = ln[7:]
+# ---------------------------------------------------------------------------- maps, lights (slice 3D-6)
+class LintError(Exception):
+    pass
+
+
+def next_tok(s, cap):
+    """src/script.cpp next_token(): one token (a "quoted string" is one, quotes kept), truncated to cap-1 characters."""
+    s = s.lstrip(' \t')
+    if not s:
+        return '', ''
+    if s[0] == '"':
+        j = s.find('"', 1)
+        body = s[1:j] if j >= 0 else s[1:]
+        rest = s[j + 1:] if j >= 0 else ''
+        return ('"' + body[:cap - 3] + ('"' if j >= 0 else ''))[:cap], rest
+    j = 0
+    while j < len(s) and s[j] not in ' \t':
+        j += 1
+    return s[:j][:cap - 1], s[j:]
+
+
+def read_lights(path):
+    """lights.txt preset names in id order (src/lights.cpp: 'day' first, a redefined name keeps its slot)."""
+    names = ['day']
+    if os.path.exists(path):
+        for ln in open(path).read().split('\n'):
+            ln = ln.split('#', 1)[0]
+            t = ln.split()
+            if len(t) >= 2 and t[0] == 'light' and t[1] not in names:
+                names.append(t[1])
+    return names
+
+
+def scan_map(path, fname, maps, lights):
+    """src/script.cpp scan_map(): entities, triggers, exits, glows and shots of a map file."""
+    m = dict(ents=[], trig=[], exits=[], glows=[], shots=[])
+    if not os.path.exists(path) or os.path.getsize(path) >= 16 * 1024:
+        raise LintError('%s:0: map file missing or larger than 16 KiB' % fname)
+    for n, ln in enumerate(open(path).read().split('\n'), 1):
+        body = ln[:199].rstrip('\r ')
         h = body.find(' #')
         if h >= 0:
             body = body[:h]
-        cond = ''
+        cond, has_if = '', False
         c = body.find(' if ')
         if c >= 0:
-            cond = body[c + 4:].strip()
+            has_if = True
+            cond = body[c + 4:].lstrip(' \t')[:63]
             body = body[:c]
-        t = body.split()
-        e = dict(id=t[0], kind=t[1], look=t[2], talk='', win='', cond=cond)
-        k = 6
-        if t[1] == 'npc' and len(t) > k + 1 and t[k] == 'talk':
-            e['talk'] = t[k + 1]
-        while k < len(t):
-            if t[k] == 'win' and k + 1 < len(t):
-                e['win'] = t[k + 1]
-            k += 1
-        ents.append(e)
-    return ents
+        w, r = next_tok(body, 16)
+        t = []
+        while len(t) < 20:
+            tok, r = next_tok(r, 16)
+            if not tok:
+                break
+            t.append(tok)
+        fail = lambda msg, d=None: (_ for _ in ()).throw(LintError('%s:%d: %s%s' % (fname, n, msg, (': ' + d) if d else '')))
+        if w == 'entity' and len(t) >= 6:
+            if len(m['ents']) >= MAX_ENTITIES:
+                fail('too many entities')
+            e = dict(id=t[0], kind=t[1], look=t[2], talk='', win='', cond=cond if has_if else '')
+            if t[1] == 'npc' and len(t) >= 8 and t[6] == 'talk':
+                e['talk'] = t[7]
+            for k in range(6, len(t) - 1):
+                if t[k] == 'win':
+                    e['win'] = t[k + 1]
+            m['ents'].append(e)
+        elif w == 'trigger' and len(t) >= 6:
+            if len(m['trig']) >= MAX_TRIGGERS:
+                fail('too many triggers')
+            m['trig'].append(dict(script=t[5], cond=cond if has_if else '', line=n))
+        elif w == 'exit' and len(t) >= 9:
+            if len(m['exits']) >= MAX_EXITS:
+                fail('too many exits')
+            if t[5] not in maps:
+                fail('exit: the destination is not a map of maps.txt', t[5])
+            m['exits'].append(dict(cond=cond if has_if else '', line=n))
+        elif w == 'glow' and len(t) >= 4:
+            if len(m['glows']) >= MAX_GLOWS:
+                fail('too many glows')
+            m['glows'].append(dict(cond=cond if has_if else '', line=n))
+        elif w == 'shot' and len(t) >= 1:
+            if len(m['shots']) >= MAX_SHOTS:
+                fail('too many shots')
+            m['shots'].append(t[0])
+        elif w == 'light' and len(t) >= 1:
+            if t[0] not in lights:
+                fail('light: unknown preset (lights.txt)', t[0])
+    return m
+
+
+def read_maps_txt(romdisk, current='village'):
+    """maps.txt: the maps (id order) and the extra script files; a map not listed makes a one-map table."""
+    maps, extra = [], []
+    p = os.path.join(romdisk, 'maps', 'maps.txt')
+    if os.path.exists(p):
+        for n, ln in enumerate(open(p).read().split('\n'), 1):
+            ln = ln.split('#', 1)[0]
+            t = ln.split()
+            if not t:
+                continue
+            if len(t) != 2 or len(t[1]) > 15 or t[0] not in ('map', 'scripts'):
+                raise LintError('maps.txt:%d: map <name> | scripts <file>' % n)
+            if t[0] == 'map':
+                if len(maps) >= MAX_MAPS:
+                    raise LintError('maps.txt:%d: too many maps (4)' % n)
+                if t[1] in maps:
+                    raise LintError('maps.txt:%d: duplicate map: %s' % (n, t[1]))
+                maps.append(t[1])
+            else:
+                if len(extra) >= MAX_FILES - MAX_MAPS:
+                    raise LintError('maps.txt:%d: too many script files' % n)
+                extra.append(t[1])
+    if current not in maps:
+        maps, extra = [current], []
+    return maps, extra
 
 
 # ---------------------------------------------------------------------------- the compiler (script.cpp)
 class Compiler:
-    def __init__(self, font, ents, clips, fname, speakers_path):
-        self.font, self.ents, self.clips, self.fname = font, ents, clips, fname
+    def __init__(self, font, clips, speakers_path, maps, scans, lights):
+        self.font, self.clips, self.fname = font, clips, 'speakers.txt'
+        self.maps, self.scans, self.lights = maps, scans, lights
+        self.actors = ['rowan']       # actor slots (script.cpp actor_find)
+        self.file_map = self.cur_map = -1
         self.ops = []                 # dicts: code a b c str + line
         self.strs = bytearray()
         self.cond = bytearray()
@@ -169,9 +267,10 @@ class Compiler:
         self.fix = []                 # (op, name, call, line)
         self.ifs = []
         self.line = 0
-        self.file = fname
+        self.file = self.fname
         self.cond_src = {}            # cond offset -> (source, line) for the analyses
         self.flag_reads = {}          # flag -> first line read
+        self.flag_read_file = {}      # flag -> the file of that line
         self.flag_sets = set()
         self.ent_cond = {}
         self.load_speakers(speakers_path)
@@ -195,22 +294,45 @@ class Compiler:
     def emit(self, code, a=0, b=0, c=0, s=0):
         if len(self.ops) >= MAX_OPS:
             self.fail('op pool full (1024)')
-        self.ops.append(dict(code=code, a=a & 0xFF, b=b & 0xFFFF, c=c & 0xFFFF, str=s & 0xFFFF, line=self.line))
+        self.ops.append(dict(code=code, a=a & 0xFF, b=b & 0xFFFF, c=c & 0xFFFF, str=s & 0xFFFF, line=self.line, file=self.fname))
         return len(self.ops) - 1
 
     def flag_find(self, name):
         return self.flags.index(name) if name in self.flags else -1
 
-    def actor_find(self, name):
-        if name == 'rowan':
-            return 0
-        for i, e in enumerate(self.ents):
+    def scan_entity(self, m, name):
+        if m < 0 or m >= len(self.maps):
+            return -1
+        for i, e in enumerate(self.scans[m]['ents']):
             if e['id'] == name:
-                return 1 + i
+                return i
         return -1
 
+    def actor_find(self, name):
+        """an actor of the current line's map -> its slot (added on first use); -1 unknown; another map's: an error"""
+        if name == 'rowan':
+            return 0
+        if self.scan_entity(self.cur_map, name) < 0:
+            for m in range(len(self.maps)):
+                if self.scan_entity(m, name) >= 0:
+                    self.fail('actor not on the script\'s map', '%s (on %s, the line runs on %s)' % (
+                        name, self.maps[m], self.maps[self.cur_map] if self.cur_map >= 0 else 'no map'))
+            return -1
+        if name in self.actors[1:]:
+            return self.actors.index(name, 1)
+        if len(self.actors) >= MAX_ACTORS:
+            self.fail('too many actors (24)')
+        self.actors.append(name[:15])
+        return len(self.actors) - 1
+
     def actor_name(self, a):
-        return 'rowan' if a == 0 else (self.ents[a - 1]['id'] if a - 1 < len(self.ents) else '?')
+        return self.actors[a] if 0 <= a < len(self.actors) else '?'
+
+    def light_find(self, name):
+        return self.lights.index(name) if name in self.lights else -1
+
+    def light_name(self, i):
+        return self.lights[i] if 0 <= i < len(self.lights) else self.lights[0]
 
     # -- conditions: the same shunting-yard as compile_cond()
     PREC = {C_NOT: 6, C_ADD: 5, C_SUB: 5, C_LT: 4, C_LE: 4, C_GT: 4, C_GE: 4, C_EQ: 3, C_NE: 3, C_AND: 2, C_OR: 1}
@@ -271,6 +393,7 @@ class Compiler:
                         self.fail('unknown name in condition (not stage, potions, max_hp or a @flags flag)', w)
                     put(C_FLAG, f)
                     self.flag_reads.setdefault(w, self.line)
+                    self.flag_read_file.setdefault(w, self.file)
                 depth += 1
                 expect = False
                 continue
@@ -438,18 +561,40 @@ class Compiler:
         self.choices.append(dict(pc=c, line=self.line))
         for i in range(len(opts)):
             op = self.emit(4, 0, 0, 0, texts[i])
-            self.fix.append((op, labels[i][:15], False, self.line))
+            self.fix.append((op, labels[i][:15], False, self.line, self.fname))
+
+    def stmt_parallel(self, line):
+        parts = line[:511].split('|')
+        if len(parts) > 4:
+            self.fail('a parallel line has at most 4 commands')
+        if len(parts) < 2:
+            self.fail('a parallel line needs two commands')
+        self.emit(S_PAR, len(parts))
+        for p in parts:
+            p = p.lstrip(' \t')
+            w = tokens(p)[0] if tokens(p) else ''
+            if w not in ('move', 'anim', 'face', 'emote', 'cam', 'wait'):
+                self.fail('only move, anim, face, emote, cam and wait may run in parallel', w[:23])
+            self.stmt_single(p[:199].rstrip(' \t'))
 
     def stmt_command(self, line):
         t = tokens(line)
         w = t[0]
-        if w in OUT_OF_SCOPE:
-            self.fail('command not in this slice', w)
         if w == 'choice':
             self.stmt_choice(line[len('choice'):].lstrip(' \t'))
             return
-        if '|' in line:
-            self.fail('parallel commands (cmd | cmd) are not in this slice')
+        q = False
+        for ch in line:
+            if ch == '"':
+                q = not q
+            elif ch == '|' and not q:
+                self.stmt_parallel(line)
+                return
+        self.stmt_single(line)
+
+    def stmt_single(self, line):
+        t = tokens(line)
+        w = t[0][:23]
         a1 = t[1] if len(t) > 1 else ''
         a2 = t[2] if len(t) > 2 else ''
         more = len(t) > 3
@@ -463,11 +608,11 @@ class Compiler:
         if w == 'goto':
             if not a1 or a2:
                 self.fail('goto takes one label')
-            op = self.emit(5); self.fix.append((op, a1[:15], False, self.line)); return
+            op = self.emit(5); self.fix.append((op, a1[:15], False, self.line, self.fname)); return
         if w == 'call':
             if not a1 or a2:
                 self.fail('call takes one script name')
-            op = self.emit(7); self.fix.append((op, a1[:15], True, self.line)); return
+            op = self.emit(7); self.fix.append((op, a1[:15], True, self.line, self.fname)); return
         if w == 'set':
             if more or not num(a2, 0, 255):
                 self.fail('set stage|max_hp <0..255>')
@@ -514,9 +659,9 @@ class Compiler:
                 self.fail('heal takes no argument')
             self.emit(14); return
         if w == 'checkpoint':
-            ids = {'c1': 1, 'c2': 2, 'rest': 9}
+            ids = {'c1': 1, 'c2': 2, 'c3': 3, 'rest': 9}
             if a1 and a1 not in ids:
-                self.fail('checkpoint [c1|c2|rest]', a1)
+                self.fail('checkpoint [c1|c2|c3|rest]', a1)
             if a2:
                 self.fail('checkpoint takes one id at most')
             self.emit(15, ids.get(a1, 1)); return
@@ -591,6 +736,99 @@ class Compiler:
             if a2 or a1 not in ('on', 'off'):
                 self.fail('letterbox on|off')
             self.emit(23, 1 if a1 == 'on' else 0); return
+        # ---- slice 3D-6: cutscene commands (script.cpp stmt_single)
+        a3 = t[3] if len(t) > 3 else ''
+        a4 = t[4] if len(t) > 4 else ''
+
+        def sint(v, lo, hi):
+            sign = v[:1] in ('-', '+')
+            d = v[1:] if sign else v
+            if not d.isdigit() or int(d) > 100000:
+                return None
+            n = -int(d) if v[:1] == '-' else int(d)
+            return (n, sign) if lo <= n <= hi else None
+        if w == 'move':
+            a = self.actor_find(a1)
+            if a < 0:
+                self.fail('move: unknown actor (rowan or a map entity id)', a1)
+            x, y = sint(a2, -63, 63), sint(a3, -63, 63)
+            if x is None or y is None or (a4 and a4 != 'run') or len(t) > 5:
+                self.fail('move <actor> <x> <y> [run] (a signed dx dy: relative)')
+            rel = x[1] or y[1]
+            if not rel and (x[0] < 0 or y[0] < 0):
+                self.fail('move: a tile is 0..63')
+            self.emit(S_MOVE, a, (x[0] & 0xFF) | (y[0] & 0xFF) << 8, (MOVE_REL if rel else 0) | (MOVE_RUN if a4 else 0)); return
+        if w == 'place':
+            a = self.actor_find(a1)
+            if a < 0:
+                self.fail('place: unknown actor (rowan or a map entity id)', a1)
+            d = DIRS.index(a4) if a4 in DIRS else (0 if not a4 else -1)
+            if not num(a2, 0, 63) or not num(a3, 0, 63) or d < 0 or len(t) > 5:
+                self.fail('place <actor> <x> <y> [down|up|left|right]')
+            self.emit(S_PLACE, a, int(a2) | int(a3) << 8, d); return
+        if w == 'cam':
+            if more or (a2 and not num(a2, 0, 600)):
+                self.fail('cam <shot|field> [0..600 ticks]')
+            tk = int(a2) if a2 else 0
+            if a1 == 'field':
+                self.emit(S_CAM, CAM_FIELD, tk, max(self.cur_map, 0)); return
+            shots = self.scans[self.cur_map]['shots'] if self.cur_map >= 0 else []
+            if a1 not in shots:
+                self.fail('cam: unknown shot (not a `shot` of the script\'s map)', a1)
+            self.emit(S_CAM, shots.index(a1), tk, self.cur_map); return
+        if w == 'battle':
+            a = self.actor_find(a1)
+            if a <= 0:
+                self.fail('battle: not an enemy of the script\'s map', a1)
+            e = self.scan_entity(self.cur_map, a1)
+            if e < 0 or self.scans[self.cur_map]['ents'][e]['kind'] == 'npc':
+                self.fail('battle: not an enemy of the script\'s map', a1)
+            if more or (a2 and a2 != 'boss'):
+                self.fail('battle <enemy> [boss]')
+            self.emit(S_BATTLE, a, 1 if a2 else 0); return
+        if w == 'map':
+            a5 = t[5] if len(t) > 5 else ''
+            a6 = t[6] if len(t) > 6 else ''
+            if a1 not in self.maps:
+                self.fail('map: not a map of maps.txt', a1)
+            m = self.maps.index(a1)
+            if not num(a2, 0, 63) or not num(a3, 0, 63) or a4 not in DIRS or len(t) > 7 or (a5 and (a5 != 'light' or not a6)):
+                self.fail('map <name> <x> <y> <dir> [light <preset>]')
+            preset = -1
+            if a5:
+                preset = self.light_find(a6)
+                if preset < 0:
+                    self.fail('map: unknown light preset (lights.txt)', a6)
+            self.cur_map = m
+            self.emit(S_MAP, m, int(a2) | int(a3) << 8, DIRS.index(a4) | (preset + 1) << 4); return
+        if w == 'light':
+            if a1 == 'lerp':
+                fr, to = self.light_find(a2), self.light_find(a3)
+                if fr < 0 or to < 0 or not num(a4, 1, 3600) or len(t) > 5:
+                    self.fail('light lerp <preset> <preset> <1..3600 ticks> (presets of lights.txt)')
+                self.emit(S_LIGHT_LERP, fr, int(a4), to); return
+            l = self.light_find(a1)
+            if l < 0 or a2:
+                self.fail('light <preset> | light lerp <a> <b> <ticks> (presets of lights.txt)', a1)
+            self.emit(S_LIGHT, l); return
+        if w in ('namecard', 'card'):
+            q = line[len(w):].lstrip(' \t')
+            if len(q) < 2 or q[0] != '"' or q[-1] != '"' or len(q) - 2 >= 48 or '"' in q[1:-1] or len(q) == 2:
+                self.fail('namecard|card "text" (1..47 characters)')
+            txt = q[1:-1]
+            r = self.font.wrap(txt, 560)
+            if r is None or r[1] != 1:
+                self.fail('card text must fit one line of 560 px', txt)
+            off = self.add_str(txt)
+            self.emit(S_NAMECARD if w == 'namecard' else S_CARD, 0, NAMECARD_TICKS if w == 'namecard' else CARD_TICKS, 0, off); return
+        if w == 'transition':
+            if a2 or a1[:1] != 'T' or not num(a1[1:], 1, 11):
+                self.fail('transition T1..T11')
+            self.emit(S_TRANSITION, int(a1[1:])); return
+        if w in ('credits', 'results', 'title'):
+            if a1:
+                self.fail('credits, results and title take no argument')
+            self.emit({'credits': S_CREDITS, 'results': S_RESULTS, 'title': S_TITLE}[w]); return
         self.fail('unknown command', w)
 
     def stmt(self, line):
@@ -602,13 +840,22 @@ class Compiler:
                 return
             if w == '@speaker':
                 self.fail('@speaker belongs in speakers.txt')
+            if w == '@map':
+                if self.in_script():
+                    self.close_script()
+                name = t[1] if len(t) > 1 else ''
+                if name not in self.maps or len(t) > 2:
+                    self.fail('@map <a map of maps.txt>', name)
+                self.file_map = self.cur_map = self.maps.index(name)
+                return
             if w == '@marker':
                 if self.in_script():
                     self.fail('@marker inside a script')
                 eid = t[1] if len(t) > 1 else ''
                 kind = t[2] if len(t) > 2 else ''
-                a = self.actor_find(eid)
-                if a <= 0 or self.ents[a - 1]['kind'] != 'npc':
+                self.cur_map = self.file_map
+                e = self.scan_entity(self.file_map, eid)
+                if e < 0 or self.scans[self.file_map]['ents'][e]['kind'] != 'npc':
                     self.fail('@marker: not an npc of the map', eid)
                 if kind not in ('!', '...'):
                     self.fail('@marker kind must be ! or ...', kind)
@@ -616,20 +863,25 @@ class Compiler:
                     self.fail('too many markers (8)')
                 crest = rest[len(eid):].lstrip(' \t')[len(kind):]
                 off, ln = self.compile_cond(crest)
-                self.markers.append(dict(entity=a - 1, kind=0 if kind == '!' else 1, cond=off, len=ln))
+                self.markers.append(dict(entity=e, kind=0 if kind == '!' else 1, cond=off, len=ln, map=self.file_map))
                 return
             if w == '@script':
                 self.close_script()
                 name = t[1] if len(t) > 1 else ''
-                if not name or len(t) > 2 or len(name) > 15:
-                    self.fail('@script <name> (15 characters at most)')
+                opt = t[2] if len(t) > 2 else ''
+                if not name or len(t) > 3 or len(name) > 15 or (opt and opt != 'skip'):
+                    self.fail('@script <name> [skip] (15 characters at most)')
+                if self.file_map < 0:
+                    self.fail('@script before @map (this file is not a map\'s: say where its scripts start)')
                 if not all(c.isdigit() or 'a' <= c <= 'z' or c == '_' for c in name):
                     self.fail('bad script name', name)
                 if any(s['name'] == name for s in self.scripts):
                     self.fail('duplicate script', name)
                 if len(self.scripts) >= MAX_SCRIPTS:
                     self.fail('too many scripts (32)')
-                self.scripts.append(dict(name=name, first=len(self.ops), end=None, line=self.line))
+                self.scripts.append(dict(name=name, first=len(self.ops), end=None, line=self.line, map=self.file_map, skip=bool(opt),
+                                         file=self.fname))
+                self.cur_map = self.file_map
                 return
             if not self.in_script():
                 self.fail('statement outside a @script', w)
@@ -706,52 +958,64 @@ class Compiler:
             return
         self.stmt_command(line)
 
-    def compile(self, src):
+    def compile(self, files):
+        """files: [(file name, source, map index or -1)] in script.cpp's order (maps.txt)."""
         self.used_portraits = set()
         self.choices = []
-        lines = split_lines(src)
-        if len(lines) > 2048:
-            self.line = 2049
-            self.fail('more than 2048 lines')
-        # pass 1: @flags
-        for n, ln in enumerate(lines, 1):
-            s = ln.lstrip(' \t')
-            if not s.startswith('@flags') or (len(s) > 6 and s[6] not in ' \t'):
-                continue
-            self.line = n
-            if self.flags:
-                self.fail('@flags declared twice')
-            for tok in s[6:].split():
-                if len(tok) > 15:
-                    self.fail('flag names are 15 characters at most', tok)
-                if not all(c.isdigit() or 'a' <= c <= 'z' or c == '_' for c in tok) or tok[0].isdigit():
-                    self.fail('bad flag name', tok)
-                if tok in ('stage', 'potions', 'max_hp'):
-                    self.fail('reserved name', tok)
-                if tok in self.flags:
-                    self.fail('duplicate flag', tok)
-                if len(self.flags) >= MAX_FLAGS:
-                    self.fail('more than 32 flags')
-                self.flags.append(tok)
-        # pass 2
-        i = 0
-        while i < len(lines):
-            self.line = i + 1
-            logical = lines[i].lstrip(' \t')
-            i += 1
-            while i < len(lines) and lines[i].lstrip(' \t').startswith('|'):
-                logical += ' ' + lines[i].lstrip(' \t')
+        split = []
+        for fname, src, fmap in files:
+            self.fname = self.file = fname
+            lines = split_lines(src)
+            if len(lines) > 2048:
+                self.line = 2049
+                self.fail('more than 2048 lines')
+            split.append((fname, lines, fmap))
+        # pass 1: every file's @flags
+        for fname, lines, fmap in split:
+            self.fname = self.file = fname
+            seen = False
+            for n, ln in enumerate(lines, 1):
+                s = ln.lstrip(' \t')
+                if not s.startswith('@flags') or (len(s) > 6 and s[6] not in ' \t'):
+                    continue
+                self.line = n
+                if seen:
+                    self.fail('@flags declared twice')
+                seen = True
+                for tok in s[6:].split():
+                    if len(tok) > 15:
+                        self.fail('flag names are 15 characters at most', tok)
+                    if not all(c.isdigit() or 'a' <= c <= 'z' or c == '_' for c in tok) or tok[0].isdigit():
+                        self.fail('bad flag name', tok)
+                    if tok in ('stage', 'potions', 'max_hp'):
+                        self.fail('reserved name', tok)
+                    if tok in self.flags:
+                        self.fail('duplicate flag', tok)
+                    if len(self.flags) >= MAX_FLAGS:
+                        self.fail('more than 32 flags')
+                    self.flags.append(tok)
+        # pass 2, file by file
+        for fname, lines, fmap in split:
+            self.fname = self.file = fname
+            self.file_map = self.cur_map = fmap
+            i = 0
+            while i < len(lines):
+                self.line = i + 1
+                logical = lines[i].lstrip(' \t')
                 i += 1
-            logical = logical[:511]
-            if not logical:
-                continue
-            if logical[0] == '|':
-                self.fail("a '|' continuation line must follow a choice")
-            self.stmt(logical)
-        self.line = len(lines)
-        self.close_script()
-        for op, name, call, ln in self.fix:
-            self.line = ln
+                while i < len(lines) and lines[i].lstrip(' \t').startswith('|'):
+                    logical += ' ' + lines[i].lstrip(' \t')
+                    i += 1
+                logical = logical[:511]
+                if not logical:
+                    continue
+                if logical[0] == '|':
+                    self.fail("a '|' continuation line must follow a choice")
+                self.stmt(logical)
+            self.line = len(lines)
+            self.close_script()
+        for op, name, call, ln, fname in self.fix:
+            self.line, self.file = ln, fname
             if call:
                 k = next((j for j, s in enumerate(self.scripts) if s['name'] == name), -1)
                 if k < 0:
@@ -762,27 +1026,40 @@ class Compiler:
                     self.fail('unknown label', name)
                 self.ops[op]['b'] = self.labels[name][0]
         for s in self.scripts:
+            self.file = s['file']
             for pc in range(s['first'], s['end']):
                 o = self.ops[pc]
                 if o['code'] in (5, 6, 4) and not (s['first'] <= o['b'] <= s['end']):
                     self.line = o['line']
                     self.fail('a label jumps into another script', s['name'])
-        # map links
-        self.file = 'maps/%s' % os.path.basename(self.map_file)
-        self.line = 0
-        for e in self.ents:
-            who = 'entity %s' % e['id']
-            if e['talk'] and not any(s['name'] == e['talk'] for s in self.scripts):
-                self.fail('talk: unknown script', who)
-            if e['win']:
-                if e['win'] not in self.flags:
-                    self.fail('win: flag not declared in @flags', who)
-                self.flag_sets.add(e['win'])
-            if e['cond']:
-                try:
-                    self.compile_cond(e['cond'])
-                except LintError as ex:
-                    raise LintError('%s (%s)' % (ex, who))
+        # map links: every map's entities, triggers, exits, glows (script.cpp link_maps)
+        for mi, mname in enumerate(self.maps):
+            sc = self.scans[mi]
+            self.file = 'maps/%s.txt' % mname
+            self.line = 0
+            for e in sc['ents']:
+                who = 'entity %s' % e['id']
+                if e['talk'] and not any(s['name'] == e['talk'] for s in self.scripts):
+                    self.fail('talk: unknown script', who)
+                if e['win']:
+                    if e['win'] not in self.flags:
+                        self.fail('win: flag not declared in @flags', who)
+                    self.flag_sets.add(e['win'])
+                if e['cond']:
+                    try:
+                        self.compile_cond(e['cond'])
+                    except LintError as ex:
+                        raise LintError('%s (%s)' % (ex, who))
+            for k, tr in enumerate(sc['trig']):
+                self.line = tr['line']
+                if not any(s['name'] == tr['script'] for s in self.scripts):
+                    self.fail('trigger: unknown script', tr['script'])
+                if tr['cond']:
+                    self.compile_cond(tr['cond'])
+            for x in sc['exits'] + sc['glows']:
+                self.line = x['line']
+                if x['cond']:
+                    self.compile_cond(x['cond'])
         self.file = self.fname
 
     # -- the dump (== script_dump in src/script.cpp)
@@ -793,10 +1070,11 @@ class Compiler:
         for i in range(1, len(self.objectives)):
             L.append('objective %d %s' % (i, quoted(self.str_at(self.objectives[i]))))
         for m in self.markers:
-            L.append('marker %s %s %s' % (self.actor_name(1 + m['entity']), '!' if m['kind'] == 0 else '...',
-                                          self.cond[m['cond']:m['cond'] + m['len']].hex()))
+            L.append('marker %s %s %s %s' % (self.maps[m['map']], self.scans[m['map']]['ents'][m['entity']]['id'], '!' if m['kind'] == 0 else '...',
+                                             self.cond[m['cond']:m['cond'] + m['len']].hex()))
+        L.append('actors %d%s' % (len(self.actors), ''.join(' ' + a for a in self.actors)))
         for si, s in enumerate(self.scripts):
-            L.append('script %d %s %d %d' % (si, s['name'], s['first'], s['end']))
+            L.append('script %d %s %d %d %s%s' % (si, s['name'], s['first'], s['end'], self.maps[s['map']], ' skip' if s['skip'] else ''))
             for pc in range(s['first'], s['end']):
                 o = self.ops[pc]
                 c, ln = o['code'], '%d %s' % (pc, SC[o['code']])
@@ -828,6 +1106,29 @@ class Compiler:
                     ln += ' %d' % o['b']
                 elif c == 23:
                     ln += ' %s' % ('on' if o['a'] else 'off')
+                elif c == S_MOVE:
+                    i8 = lambda v: v - 256 if v > 127 else v
+                    ln += ' %s %d %d%s%s' % (self.actor_name(o['a']), i8(o['b'] & 0xFF), i8(o['b'] >> 8),
+                                             ' rel' if o['c'] & MOVE_REL else '', ' run' if o['c'] & MOVE_RUN else '')
+                elif c == S_PLACE:
+                    ln += ' %s %d %d %s' % (self.actor_name(o['a']), o['b'] & 0xFF, o['b'] >> 8, DIRS[o['c'] & 3])
+                elif c == S_CAM:
+                    ln += ' %s %d' % ('field' if o['a'] == CAM_FIELD else self.scans[o['c'] % MAX_MAPS]['shots'][o['a']], o['b'])
+                elif c == S_PAR:
+                    ln += ' %d' % o['a']
+                elif c == S_BATTLE:
+                    ln += ' %s%s' % (self.actor_name(o['a']), ' boss' if o['b'] else '')
+                elif c == S_MAP:
+                    ln += ' %s %d %d %s %s' % (self.maps[o['a']], o['b'] & 0xFF, o['b'] >> 8, DIRS[o['c'] & 3],
+                                               self.light_name((o['c'] >> 4) - 1) if o['c'] >> 4 else '-')
+                elif c == S_LIGHT:
+                    ln += ' %s' % self.light_name(o['a'])
+                elif c == S_LIGHT_LERP:
+                    ln += ' %s %s %d' % (self.light_name(o['a']), self.light_name(o['c']), o['b'])
+                elif c in (S_NAMECARD, S_CARD):
+                    ln += ' %s %d' % (quoted(self.str_at(o['str'])), o['b'])
+                elif c == S_TRANSITION:
+                    ln += ' T%d' % o['a']
                 L.append(ln)
         return '\n'.join(L) + '\n'
 
@@ -891,10 +1192,14 @@ def successors(c, pc):
         return [c.ops[pc + 1 + k]['b'] for k in range(o['a'])]
     if code == 4:
         return []
+    if code == S_PAR:
+        return [pc + 1 + o['a']]
+    if code == S_TITLE:                        # the session ends
+        return []
     return [pc + 1]
 
 
-BLOCKING = (1, 2, 3, 19, 21, 22)
+BLOCKING = (1, 2, 3, 19, 21, 22, S_MOVE, S_CAM, S_PAR, S_BATTLE, S_MAP, S_NAMECARD, S_CARD, S_TRANSITION, S_CREDITS, S_RESULTS)
 
 
 def stage_constraints(c, off, taken):
@@ -941,7 +1246,7 @@ def analyse(c, errors):
         while work:
             pc = work.pop()
             if pc >= end:
-                errors.append('%s:%d: a path runs off the end of the script %s (missing \'end\')' % (c.fname, s['line'], s['name']))
+                errors.append('%s:%d: a path runs off the end of the script %s (missing \'end\')' % (s['file'], s['line'], s['name']))
                 continue
             if pc in seen:
                 continue
@@ -949,7 +1254,7 @@ def analyse(c, errors):
             work.extend(successors(c, pc))
         for pc in range(first, end):
             if pc not in seen and c.ops[pc]['code'] in (1, 2, 3):
-                errors.append('%s:%d: unreachable %s in %s' % (c.fname, c.ops[pc]['line'],
+                errors.append('%s:%d: unreachable %s in %s' % (c.ops[pc]['file'], c.ops[pc]['line'],
                                                               {1: 'page', 2: 'sys page', 3: 'choice'}[c.ops[pc]['code']], s['name']))
         # the branch walk: from every reachable op an END must be reachable, and no cycle may be free of blocking ops
         can_end = set()
@@ -959,11 +1264,11 @@ def analyse(c, errors):
             for pc in seen:
                 if pc in can_end:
                     continue
-                if c.ops[pc]['code'] == 0 or any(n in can_end for n in successors(c, pc) if n < end):
+                if c.ops[pc]['code'] in (0, S_TITLE) or any(n in can_end for n in successors(c, pc) if n < end):
                     can_end.add(pc); changed = True
         for pc in sorted(seen):
             if pc not in can_end:
-                errors.append('%s:%d: dead end in %s: no path from here reaches an end (a loop with no exit)' % (c.fname, c.ops[pc]['line'], s['name']))
+                errors.append('%s:%d: dead end in %s: no path from here reaches an end (a loop with no exit)' % (c.ops[pc]['file'], c.ops[pc]['line'], s['name']))
                 break
         # a cycle made only of non-blocking ops would spin forever within one tick
         nb = {pc for pc in seen if c.ops[pc]['code'] not in BLOCKING}
@@ -980,7 +1285,7 @@ def analyse(c, errors):
             return False
         for u in sorted(nb):
             if u not in color and dfs(u):
-                errors.append('%s:%d: a loop in %s never blocks (no page, choice, wait or fade): the VM would stop it' % (c.fname, c.ops[u]['line'], s['name']))
+                errors.append('%s:%d: a loop in %s never blocks (no page, choice, wait or fade): the VM would stop it' % (c.ops[u]['file'], c.ops[u]['line'], s['name']))
                 break
         # stage intervals (only moves forward)
         iv = {first: entry_stage}
@@ -996,7 +1301,7 @@ def analyse(c, errors):
             outs = []
             if o['code'] == 8:
                 if hi > o['a']:
-                    errors.append('%s:%d: set stage %d where the stage may already be %d (the stage only moves forward)' % (c.fname, o['line'], o['a'], hi))
+                    errors.append('%s:%d: set stage %d where the stage may already be %d (the stage only moves forward)' % (o['file'], o['line'], o['a'], hi))
                 outs.append((pc + 1, (max(lo, o['a']), max(hi, o['a']))))
             elif o['code'] == 6:
                 a = stage_constraints(c, o['c'], True)
@@ -1036,11 +1341,11 @@ def analyse(c, errors):
                 return True
             return all(walk(n, seen + (pc,)) for n in successors(c, pc))
         if not walk(start):
-            errors.append('%s:%d: the cancel option\'s branch ends without a page: it must tell the player how to come back (GDD 7.3)' % (c.fname, ch['line']))
+            errors.append('%s:%d: the cancel option\'s branch ends without a page: it must tell the player how to come back (GDD 7.3)' % (c.ops[ch['pc']]['file'], ch['line']))
     # every flag read is set somewhere
     for f, ln in sorted(c.flag_reads.items(), key=lambda kv: kv[1]):
         if f not in c.flag_sets:
-            errors.append('%s:%d: flag %s is read but never set (flag, give skill/token, or a map entity\'s win)' % (c.fname, ln, f))
+            errors.append('%s:%d: flag %s is read but never set (flag, give skill/token, or a map entity\'s win)' % (c.flag_read_file.get(f, c.fname), ln, f))
 
 
 def check_portraits(c, romdisk, errors):
@@ -1065,25 +1370,38 @@ def read_clips(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('romdisk', nargs='?', default=os.path.join(ROOT, 'romdisk'))
-    ap.add_argument('--map', default='village')
-    ap.add_argument('--script', help='lint this file instead of <romdisk>/scripts/<map>.txt')
+    ap.add_argument('--map', default='village', help='the map the game boots on (maps.txt decides the rest)')
+    ap.add_argument('--script', help='lint this file in place of <romdisk>/scripts/<--as>.txt')
+    ap.add_argument('--as', dest='as_name', default='village', help='the script file --script replaces (default village)')
     ap.add_argument('--dump', action='store_true')
     ap.add_argument('--quiet', action='store_true')
     a = ap.parse_args()
     font = Font(os.path.join(a.romdisk, 'fonts', 'dialog.fnt'))
-    map_file = os.path.join(a.romdisk, 'maps', a.map + '.txt')
-    ents = read_map(map_file)
     clips = read_clips(os.path.join(a.romdisk, 'anims', 'rig_medium.dma'))
-    path = a.script or os.path.join(a.romdisk, 'scripts', a.map + '.txt')
     errors = []
     try:
-        c = Compiler(font, ents, clips, a.map + '.txt' if not a.script else os.path.basename(path),
-                     os.path.join(a.romdisk, 'scripts', 'speakers.txt'))
-        c.map_file = map_file
-        src = open(path, encoding='latin-1').read()
-        if len(src.encode('latin-1')) >= 16 * 1024:
-            raise LintError('%s:0: script file missing or larger than 16 KiB' % os.path.basename(path))
-        c.compile(src)
+        maps, extra = read_maps_txt(a.romdisk, a.map)
+        lights = read_lights(os.path.join(a.romdisk, 'maps', 'lights.txt'))
+        scans = [scan_map(os.path.join(a.romdisk, 'maps', m + '.txt'), 'maps/%s.txt' % m, maps, lights) for m in maps]
+        files = []
+        for k, name in enumerate(maps + extra):
+            path = os.path.join(a.romdisk, 'scripts', name + '.txt')
+            fname = name + '.txt'
+            if a.script and name == a.as_name:
+                path, fname = a.script, os.path.basename(a.script)
+            if not os.path.exists(path):
+                continue
+            src = open(path, encoding='latin-1').read()
+            if len(src.encode('latin-1')) >= 16 * 1024:
+                raise LintError('%s:0: script file missing or larger than 16 KiB' % fname)
+            files.append((fname, src, k if k < len(maps) else -1))
+        if not files:
+            print('no script files')
+            return 0
+        c = Compiler(font, clips, os.path.join(a.romdisk, 'scripts', 'speakers.txt'), maps, scans, lights)
+        c.compile(files)
+        if extra and not os.path.exists(os.path.join(a.romdisk, 'scripts', 'credits.txt')):
+            raise LintError('credits.txt:0: missing: the ending\'s `credits` rolls romdisk/scripts/credits.txt')
     except LintError as e:
         print(e)
         return 1
@@ -1096,9 +1414,9 @@ def main():
         print(e)
     if not a.quiet:
         n_pages = sum(1 for o in c.ops if o['code'] in (1, 2))
-        print('%s: %d scripts, %d ops, %d pages, %d choices, %d flags, %d speakers: %s' % (
-            os.path.basename(path), len(c.scripts), len(c.ops), n_pages, len(c.choices), len(c.flags), len(c.speakers),
-            'clean' if not errors else '%d errors' % len(errors)))
+        print('%s: %d scripts, %d ops, %d pages, %d choices, %d flags, %d speakers, %d actors, %d maps: %s' % (
+            ', '.join(f[0] for f in files), len(c.scripts), len(c.ops), n_pages, len(c.choices), len(c.flags), len(c.speakers),
+            len(c.actors), len(maps), 'clean' if not errors else '%d errors' % len(errors)))
     return 1 if errors else 0
 
 

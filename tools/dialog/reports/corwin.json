@@ -1,0 +1,86 @@
+{
+ "source": "Ranger.fbx",
+ "budget": 1000,
+ "parts": [
+  {
+   "part": "armleft",
+   "source_tris": 820,
+   "after_dissolve": 656,
+   "tris": 92,
+   "target": 92,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "armright",
+   "source_tris": 820,
+   "after_dissolve": 656,
+   "tris": 92,
+   "target": 92,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "body",
+   "source_tris": 3461,
+   "after_dissolve": 3197,
+   "tris": 389,
+   "target": 389,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "cape",
+   "source_tris": 84,
+   "after_dissolve": 76,
+   "tris": 9,
+   "target": 9,
+   "glow": false,
+   "double_sided": true
+  },
+  {
+   "part": "head",
+   "source_tris": 1600,
+   "after_dissolve": 1554,
+   "tris": 179,
+   "target": 180,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "legleft",
+   "source_tris": 930,
+   "after_dissolve": 852,
+   "tris": 104,
+   "target": 104,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "legright",
+   "source_tris": 930,
+   "after_dissolve": 852,
+   "tris": 104,
+   "target": 104,
+   "glow": false,
+   "double_sided": false
+  },
+  {
+   "part": "quiver",
+   "source_tris": 255,
+   "after_dissolve": 251,
+   "tris": 29,
+   "target": 29,
+   "glow": false,
+   "double_sided": false
+  }
+ ],
+ "out": "corwin.dmf",
+ "tris": 998,
+ "verts": 1112,
+ "groups": 35,
+ "strips": 348,
+ "verts_per_tri": 1.697,
+ "bytes": 50592,
+ "source_tris": 8900
+}

@@ -79,7 +79,7 @@ for n, line in enumerate(open(trace), 1):
         if contact_tile and (tx, ty) != contact_tile: err(f"F8: returned to {tx},{ty}, contact was at {contact_tile}")
         gone = [k for k, v in ent.items() if not v[2]]
         if not gone: err("F8: no entity removed after a win")
-    if prev_mode == "game_over" and mode == "field":     # retry after Game Over
+    if prev_mode in ("game_over", "death") and mode == "field":     # retry after Game Over (slice 3D-6: the death screen)
         restarts += 1
         if (tx, ty) != spawn: err(f"F9: restart at {tx},{ty}, spawn is {spawn}")
         if hp != hpmax: err(f"F9: restart with {hp}/{hpmax} HP")

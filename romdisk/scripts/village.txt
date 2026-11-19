@@ -1,19 +1,36 @@
-# village.txt - the village's scripts (slice 3D-5: "Talk to Wren"). GDD 7.4 / Appendix A.
-# Compiled at load by src/script.cpp into fixed pools; checked by tools/dialog/lint.py (tests/dialog).
-# The GDD Appendix A lines are kept verbatim; every change is marked "# slice 3D-5" with its reason:
-#   AD4  lines that mention Corwin (not in this slice) are rewritten
+# village.txt - the village's scripts (slice 3D-5: "Talk to Wren"; slice 3D-6: the gate, the intro). GDD 7.4 / Appendix A.
+# Compiled at boot by src/script.cpp into fixed pools (with barrow.txt and ending.txt: romdisk/maps/maps.txt); checked by
+# tools/dialog/lint.py (tests/dialog, tests/barrow). The GDD Appendix A lines are kept verbatim; every change is marked
+# "# slice 3D-5" or "# slice 3D-6" with its reason:
 #   AD5  the stage-0 report branch also teaches Fireball (a GDD script bug: that route never did)
-#   AD6  the ending is out of scope: the Warden's defeat sets stage 6 (the GDD's stage 7 line plays from 6)
 #   AD8  data directives: @flags, @marker (and speakers.txt)
 #   D1   one GDD page split in two: the supplied pixel font is wider than the GDD's stand-in (page fit)
 #   S16  emotes and gestures (emote / anim commands; no dialogue line changes)
 #   S17  checkpoint ids (c1, c2, rest) name the checkpoint in the traces; the behaviour is the GDD's
+#   slice 3D-6 undoes slice 3D-5's AD3 (the Warden on the east road), AD4 (Corwin's lines rewritten), AD6 (stage 6 =
+#   the end) and AD7 (GAME OVER): Corwin guards the gate, the Warden is the barrow's (barrow.txt), the ending is a
+#   script (ending.txt), a lost battle shows the death screen.
 
-@flags patrol_a patrol_b skill_fire has_token talked_brom brom_refill warden_down      # slice 3D-5 (AD8)
+@flags patrol_a patrol_b skill_fire has_token talked_brom brom_refill gate_open       # slice 3D-5 (AD8); 3D-6: gate_open
 @marker wren ! stage == 0 || stage == 2                                                  # slice 3D-5 (AD8)
 @marker brom ... !talked_brom || stage >= 3 && !brom_refill                              # slice 3D-5 (AD8)
+@marker corwin ! stage == 3                                                              # slice 3D-6: GDD App. B (S3)
 
-@script new_game                  # slice 3D-5: run at a new game (stands in for the intro's last command)
+@script new_game                  # slice 3D-5: run at a new game (the host harness starts in the field: no intro)
+  objective "Speak with Wren"
+  end
+
+@script intro skip                # GDD App. A: the intro cutscene (slice 3D-6: after T2; Start skips it)
+  letterbox on
+  cam arrival 0
+  place rowan 0 15 right          # slice 3D-6: the spawn (C0) is inside the gate: he starts outside it
+  move rowan 3 15
+  wait 20
+  emote wren !
+  anim wren interact
+  cam overview 30
+  wait 20                         # slice 3D-6: a beat on the overview before the bars go
+  letterbox off
   objective "Speak with Wren"
   end
 
@@ -38,17 +55,17 @@
 :report
   wren(happy): Both patrols? You're quicker than my kettle.
   anim wren use_item                                      # slice 3D-5 (S16)
-  wren: Take this token - the old ward on the east road will let you pass. And hold still...   # slice 3D-5 (AD4)
+  wren: Take this token - Corwin will let you pass. And hold still...
   give token
   set max_hp 30
   heal
   sys: Wren's blessing! Max HP +10, fully healed.
   set stage 3
-  objective "Face what waits on the east road"            # slice 3D-5 (AD4)
+  objective "Show the token to Corwin"
   checkpoint c2                                           # slice 3D-5 (S17: id)
   end
-@elif stage >= 3 && stage < 6                             # slice 3D-5 (AD6: 7 -> 6)
-  wren: Something old walks the east road now. See Brom for potions before you go.   # slice 3D-5 (AD4)
+@elif stage >= 3 && stage < 7
+  wren: Corwin is waiting at the east road. Be careful in the barrow.
   end
 @else
   wren(happy): Hollowmere sleeps easy tonight. Thanks to you.
@@ -102,14 +119,37 @@
   end
 @end
 
-@script after_battle                                      # slice 3D-5: run after every won battle
-@if stage == 1 && patrol_a + patrol_b == 2
+@script corwin_block                                      # GDD App. A: the trigger on the east road while !gate_open
+  move corwin 38 14 | face rowan corwin                   # slice 3D-6: he steps into the road (GDD 9.3 "Corwin steps in")
+  face corwin rowan
+  move rowan -1 0                                         # walked back one tile
+  corwin: Road's closed. Nobody goes near the barrow, not with those things about.
+  corwin: If Wren vouches for you, that's different.
+  move corwin 37 13                                       # slice 3D-6: back to his post
+  face corwin left
+  end
+
+@script corwin_main                                       # GDD App. A
+@if stage == 3 && has_token && !gate_open                 # slice 3D-6: + stage == 3 (the same state: the lint's stage check)
+  corwin: Wren's token. Well then.
+  corwin(worried): When the old thing gathers the dark, get your shield up. Trust me.
+  move corwin 38 13                                       # slice 3D-6: (37,12) is inside the VS1 house: he steps aside north-east
+  face corwin left
+  flag gate_open
+  set stage 4
+  sys: The east road is open.
+  objective "Enter the Barrow"
+@elif gate_open
+  corwin: Shield up when it gathers the dark. Go on.
+@else
+  corwin: Nobody goes east. Talk to Wren if you must.
+@end
+  end
+
+@script after_battle                                      # slice 3D-5: run after every won battle (slice 3D-6: the patrols only;
+@if stage == 1 && patrol_a + patrol_b == 2                #   the Warden's battle is the barrow's script and the ending follows it)
   set stage 2
   objective "Report to Wren"
   sys: Both patrols are down. Report to Wren.
-@elif warden_down && stage < 6
-  set stage 6
-  objective ""
-  sys: The Bone Warden is at rest. The barrow is quiet.
 @end
   end

@@ -2,7 +2,9 @@
 #include "field3d.h"
 #include "anim.h"
 #include "assets.h"
+#include "battle3d.h"
 #include "dialog_ui.h"
+#include "lights.h"
 #include "dmf.h"
 #include "field.h"
 #include "font.h"
@@ -10,6 +12,7 @@
 #include "models.h"
 #include "render3d.h"
 #include "text.h"
+#include "uitext.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -77,6 +80,11 @@ static const Tune TUNES[] = {
     { "dlg_pitch", &DLG_PITCH }, { "dlg_dist", &DLG_DIST }, { "dlg_fov", &DLG_FOV }, { "dlg_yaw", &DLG_YAW },
     { "dlg_look_h", &DLG_LOOK_H }, { "dlg_margin", &DLG_MARGIN }, { "npc_turn", &NPC_TURN },
     { "mark_lift", &MARK_LIFT }, { "mark_size", &MARK_SIZE },
+    // cel-shading feasibility prototype (render3d.h CelParams; docs/CEL_SHADING_STUDY.md)
+    { "cel_outline_px", &r3d::cel().outline_px }, { "cel_chars", &r3d::cel().chars }, { "cel_props", &r3d::cel().props },
+    { "cel_toon", &r3d::cel().toon }, { "cel_band_lo", &r3d::cel().band_lo }, { "cel_band_hi", &r3d::cel().band_hi },
+    { "cel_rgb", &r3d::cel().outline_rgb }, { "cel_lod", &r3d::cel().lod }, { "cel_zpush", &r3d::cel().zpush },
+    { "cel_weapons", &r3d::cel().weapons },
 };
 const int   BORDER_TILES  = 10;      // ground drawn around the map so the view never shows a void
 const float GROUND_FAR    = 40.0f;   // ground is not drawn beyond this distance from the eye
@@ -121,19 +129,29 @@ static Clips clips_of(int mi) {
 // Entity looks (field.h EntityLook). The skeletons carry their field clips (idle, walk) in the .dmf;
 // Wren and Brom use the shared library (slice 3D-5, decision D9): idle_a, walk, interact, use_item.
 // Every look is also bound to the library, so the script's `anim` plays any clip on anyone.
-struct LookDef { const char* model; bool library; };
+// Slice 3D-6: scale (x ENEMY_SCALE: the Bone Warden is 1.5x, GDD 2.2) and static looks (the waystone: a prop-like
+// model without a skeleton, drawn with baked colours; decision BA1).
+struct LookDef { const char* model; bool library; float scale; bool is_static; };
 // The patrols are the VS1 Skeleton_Warrior (docs/SLICE_VS1_ART.md: 2,885 triangles, skull and spiked helmet intact;
 // the battle keeps its 788-triangle skel_warrior, three of which share a frame).
-static const LookDef LOOKS[ELOOK_COUNT] = { { "skel_warrior", false }, { "skel_mage", false }, { "wren", true }, { "brom", true } };
-// Enemies and NPCs only turn in yaw: their lighting is baked per yaw bucket (idle-pose normals).
+static const LookDef LOOKS[ELOOK_COUNT] = {
+    { "skel_warrior", false, 1.0f, false }, { "skel_mage", false, 1.0f, false }, { "wren", true, 1.0f, false },
+    { "brom", true, 1.0f, false }, { "corwin", true, 1.0f, false }, { "skel_mage", false, 1.5f, false },
+    { "waystone", false, 1.5f, true } };   // the stone: 1.5 x 0.66 = about world scale
+// Enemies and NPCs only turn in yaw: their lighting is baked per yaw bucket (idle-pose normals). Looks that share a
+// model (the guard and the Warden) share the baked colours.
 const int ENEMY_YAW_BUCKETS = 16;
-const int LIT_POOL_VERTS = 7680;     // sum of the looks' vertex counts (7,628 with VS1's heads: skeleton 2,007, Warden 1,671, Wren 2,047, Brom 1,903)
+const int LIT_POOL_VERTS = 9728;     // sum of the distinct models' vertex counts (skeleton 2,007, skel_mage 1,671, Wren 2,047,
+                                     // Brom 1,903, Corwin ~2,000; slice 3D-6 added Corwin)
 struct LookRt {
     int model;
     Clips clips;                     // embedded (skeletons) or library clip ids and lengths (NPCs)
     anim::Binding bind;
     bool bound;
-    float top;                       // head-top height (units, at ENEMY_SCALE): markers and emotes
+    float top;                       // head-top height (units, at the look's scale): markers and emotes
+    float scale;                     // ENEMY_SCALE x LOOKS[].scale
+    int  shares;                     // the look whose baked colours this one uses (-1: its own)
+    int  idle_embedded, idle_library;   // the bake pose
     uint32_t* lit[ENEMY_YAW_BUCKETS];
 };
 static LookRt g_look[ELOOK_COUNT];
@@ -142,6 +160,7 @@ static anim::Binding g_knight_bind;
 static bool g_knight_bound = false;
 static const anim::Library* g_lib = nullptr;
 static int g_clip_interact = -1;
+static int g_clip_awaken = -1;         // slice 3D-6: an `asleep` entity holds its first frame (lying) until woken
 
 const int MAX_STATICS = 320;
 const int COLOR_POOL = 48 * 1024;
@@ -159,10 +178,36 @@ static float g_static_box[MAX_STATICS][6];   // world AABB: min xyz, max xyz
 static int g_nstatics = 0;
 static uint32_t g_color_pool[COLOR_POOL];
 static int g_color_used = 0;
-struct LitKey { int model; int yaw_q; const uint32_t* colors; };
+struct LitKey { int model; int yaw_q; uint32_t* colors; Mat34 world; };
 static LitKey g_lit[MAX_STATICS];
 static int g_nlit = 0;
 static bool g_scene_built = false;
+
+// ---- slice 3D-6: the light preset in effect (lights.h)
+static LightPreset g_lp;               // what is baked (or, during a lerp, the current blend)
+static int  g_lp_id = 0;
+static Light g_light;                  // g_lp as the renderer's light
+struct LightLerp { bool on; int from, to, t, len; };
+static LightLerp g_lerp = { false, 0, 0, 0, 0 };
+static bool g_chars_dynamic = false;   // characters lit per frame (a lerp runs, or a re-bake is pending)
+static int  g_bake_next = -1;          // re-bake queue after a lerp: next item (-1: none pending)
+
+static Light light_of(const LightPreset& p) {
+    Light l;
+    l.dir = v3(p.dir[0], p.dir[1], p.dir[2]);
+    l.ambient = p.ambient; l.diffuse = p.diffuse;
+    return l;
+}
+
+// One colour set of a static model under the current preset: runtime-lit models take the light and its colour,
+// baked ones (PRELIT) the tint.
+static void light_static(const LitKey& k) {
+    const dmf::Model& m = models_at(k.model).m;
+    prelight(m, k.world, g_light, k.colors);
+    const uint32_t mul = (m.h->flags & dmf::DMF_PRELIT) ? g_lp.tint : g_lp.colour;
+    if ((mul & 0xFFFFFFu) != 0xFFFFFFu)
+        for (int i = 0; i < m.h->num_verts; ++i) k.colors[i] = rgb_mul(k.colors[i], mul);
+}
 
 static const uint32_t* lit_colors(int model, float yaw_rad, const Mat34& world) {
     // 1-degree buckets; baked models (PRELIT, the VS1 village art) have one colour set whatever the yaw
@@ -173,8 +218,9 @@ static const uint32_t* lit_colors(int model, float yaw_rad, const Mat34& world) 
     if (g_color_used + m.h->num_verts > COLOR_POOL || g_nlit >= MAX_STATICS) return nullptr;
     uint32_t* c = g_color_pool + g_color_used;
     g_color_used += m.h->num_verts;
-    prelight(m, world, default_light(), c);
-    g_lit[g_nlit++] = LitKey{ model, yq, c };
+    g_lit[g_nlit] = LitKey{ model, yq, c, world };
+    light_static(g_lit[g_nlit]);
+    ++g_nlit;
     return c;
 }
 
@@ -231,16 +277,17 @@ static int g_ground_tpt = 4;                // texels per tile of the generated 
 static eng::Sprite g_gnd_tex = 0;
 static eng::Material g_gnd_mat = 0;
 static char g_gnd_map[32] = "";             // the map the painted texture belongs to
+static int  g_gnd_w = 0, g_gnd_h = 0;        // its size (a second painted map must match: the slot is reused)
 struct GndHeader { char magic[4]; uint16_t w, h, tpt, margin, map_w, map_h, outer565, flags; uint32_t bytes; uint8_t pad[8]; };
 static_assert(sizeof(GndHeader) == 32, "GND1 header");
 alignas(32) static uint8_t g_gnd_file[32 + eng::VQ_CODEBOOK_BYTES + 512 * 512 / 4 + 32];   // + room: file_read wants cap > size
 
-// The painted ground of this map, if there is one (loaded once per map; one painted map per session - a
-// second one falls back to the generated ground, as no texture can be freed).
+// The painted ground of this map, if there is one. Slice 3D-6: a second painted map (the barrow) reuses the first
+// one's VQ texture slot (texture_update_vq: same 512x512 size; the map change happens under a full fade, so the
+// slot has not been drawn for 2 frames - decision D5).
 static bool load_painted_ground() {
     const FieldState& f = field_state();
     if (g_gnd_tex && strcmp(g_gnd_map, f.name) == 0) return true;
-    if (g_gnd_tex) return false;
     char path[64];
     snprintf(path, sizeof path, "/rd/maps/%s.gnd", f.name);
     if (!eng::file_exists(path)) return false;
@@ -253,9 +300,19 @@ static bool load_painted_ground() {
         eng::dbg_print(msg);
         return false;
     }
-    g_gnd_tex = eng::texture_create_vq(g_gnd_file + 32, (int)h->bytes, h->w, h->h);
-    if (!g_gnd_tex) return false;
-    g_gnd_mat = eng::material_create(g_gnd_tex, eng::MAT_BILINEAR);
+    if (g_gnd_tex) {
+        if (h->w != g_gnd_w || h->h != g_gnd_h || !eng::texture_update_vq(g_gnd_tex, g_gnd_file + 32, (int)h->bytes)) {
+            snprintf(msg, sizeof msg, "field3d: %s does not fit the painted ground's texture slot: the generated ground instead", path);
+            eng::dbg_print(msg);
+            g_gnd_map[0] = '\0';
+            return false;
+        }
+    } else {
+        g_gnd_tex = eng::texture_create_vq(g_gnd_file + 32, (int)h->bytes, h->w, h->h);
+        if (!g_gnd_tex) return false;
+        g_gnd_w = h->w; g_gnd_h = h->h;
+        g_gnd_mat = eng::material_create(g_gnd_tex, eng::MAT_BILINEAR);
+    }
     g_gv.tw = h->w; g_gv.th = h->h; g_gv.tpt = h->tpt; g_gv.margin = h->margin;
     const uint32_t o = h->outer565;
     g_gv.outer_rgb = ((o >> 11) * 255 / 31) << 16 | (((o >> 5) & 63) * 255 / 63) << 8 | ((o & 31) * 255 / 31);
@@ -382,20 +439,22 @@ static void build_scene() {
         const float r = 0.45f * ((m.h->bmax[0] - m.h->bmin[0]) > (m.h->bmax[2] - m.h->bmin[2]) ? (m.h->bmax[0] - m.h->bmin[0]) : (m.h->bmax[2] - m.h->bmin[2]));
         add_static(mi, p.x, p.y, p.rot_deg, 1.0f, fades, (fades || baked) ? 0.0f : (r < 1.4f ? r : 1.4f));
     }
-    // fences: a segment between every pair of neighbouring # tiles (joins at corners)
+    // fences: a segment between every pair of neighbouring # tiles (joins at corners); slice 3D-6: `fences <model>`
+    const int fence_m = f.fence_model[0] ? model_get(f.fence_model) : g_fence;
     for (int y = 0; y < f.h; ++y)
         for (int x = 0; x < f.w; ++x) {
             if (f.tiles[y * f.w + x] != TILE_WALL) continue;
-            if (x + 1 < f.w && f.tiles[y * f.w + x + 1] == TILE_WALL) add_static(g_fence, (float)x + 1.0f, (float)y + 0.5f, 0.0f, 1.0f, false, 0.0f);
-            if (y + 1 < f.h && f.tiles[(y + 1) * f.w + x] == TILE_WALL) add_static(g_fence, (float)x + 0.5f, (float)y + 1.0f, 90.0f, 1.0f, false, 0.0f);
+            if (x + 1 < f.w && f.tiles[y * f.w + x + 1] == TILE_WALL) add_static(fence_m, (float)x + 1.0f, (float)y + 0.5f, 0.0f, 1.0f, false, 0.0f);
+            if (y + 1 < f.h && f.tiles[(y + 1) * f.w + x] == TILE_WALL) add_static(fence_m, (float)x + 0.5f, (float)y + 1.0f, 90.0f, 1.0f, false, 0.0f);
         }
-    // trees on T tiles: yaw and size vary per tile (deterministic)
-    if (g_tree >= 0 && !models_at(g_tree).faded.m) make_faded(models_at(g_tree));
+    // trees on T tiles: yaw and size vary per tile (deterministic); slice 3D-6: `trees <model>` (the barrow's dead trees)
+    const int tree_m = f.tree_model[0] ? model_get(f.tree_model) : g_tree;
+    if (tree_m >= 0 && !models_at(tree_m).faded.m) make_faded(models_at(tree_m));
     for (int y = 0; y < f.h; ++y)
         for (int x = 0; x < f.w; ++x) {
             if (f.tiles[y * f.w + x] != TILE_TREE) continue;
             const uint32_t h = hash2(x, y);
-            add_static(g_tree, (float)x + 0.5f, (float)y + 0.5f, (float)(h % 8) * 45.0f, 0.85f + 0.1f * (float)((h >> 8) % 4), true, 0.75f);
+            add_static(tree_m, (float)x + 0.5f, (float)y + 0.5f, (float)(h % 8) * 45.0f, 0.85f + 0.1f * (float)((h >> 8) % 4), true, 0.75f);
         }
     snprintf(msg, sizeof msg, "field3d: %d static instances, %d prelit colour sets, %d/%d colours, %d models, %d KiB model arena",
              g_nstatics, g_nlit, g_color_used, COLOR_POOL, models_count(), dmf::loaded_bytes() / 1024);
@@ -426,8 +485,18 @@ struct View {
     Vec3  cam_eye, cam_look;           // the camera of the last tick (info)
     int   clock;                       // ticks (bobbing)
     int   n_markers, n_emotes;         // drawn last frame
+    // slice 3D-6
+    bool  woken[MAX_ENTITIES];         // an `asleep` entity has been animated (the Warden rising): no more lying pose
 };
 static View g_v;
+
+// Slice 3D-6: the scripted camera (`cam <shot> <ticks>`: eased with smoothstep from where the camera was; `cam field`
+// eases back to the follow camera) and the override (the title's orbit, the credits' flyover: set every tick).
+struct ScriptCam { bool on, to_field; Vec3 from_eye, from_look, to_eye, to_look; float from_fov, to_fov; int t, len; };
+static ScriptCam g_sc = { false, false, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, { 0, 0, 0 }, 32.0f, 32.0f, 0, 0 };
+struct CamOverride { bool on; Vec3 eye, look; float fov; };
+static CamOverride g_co = { false, { 0, 0, 0 }, { 0, 0, 0 }, 32.0f };
+static bool g_show_hero = true, g_show_ents = true;
 static bool g_inited = false;
 
 static void hero_world(const Hero& h, float* x, float* z) {
@@ -583,74 +652,242 @@ bool field3d_two_shot(float hx, float hz, float nx, float nz, float eye[3], floa
     return ok;
 }
 
-// The camera of this tick: the follow camera, eased toward the dialog shot by dialog_cam_weight().
-static void current_camera(Camera* cam) {
-    Vec3 eye, look;
-    field_eye_look(&eye, &look);
-    float fov = CAM_FOV_Y;
+// The follow camera eased toward the dialog shot by dialog_cam_weight() (no script camera).
+static void field_or_dialog(Vec3* eye, Vec3* look, float* fov) {
+    field_eye_look(eye, look);
+    *fov = CAM_FOV_Y;
     const float w = dialog_cam_weight();
     if (w > 0.0f && g_v.dlg_ok) {
-        eye = lerp(eye, g_v.dlg_eye, w);
-        look = lerp(look, g_v.dlg_look, w);
-        fov += (DLG_FOV - CAM_FOV_Y) * w;
+        *eye = lerp(*eye, g_v.dlg_eye, w);
+        *look = lerp(*look, g_v.dlg_look, w);
+        *fov += (DLG_FOV - CAM_FOV_Y) * w;
     }
+}
+
+static float smooth01(float u) { u = u < 0.0f ? 0.0f : (u > 1.0f ? 1.0f : u); return u * u * (3.0f - 2.0f * u); }
+
+// The camera of this tick: the override (title, credits), else the script camera eased between its shots (or back
+// to the field), else the follow camera eased toward the dialog shot.
+static void current_eye_look(Vec3* eye, Vec3* look, float* fov) {
+    if (g_co.on) { *eye = g_co.eye; *look = g_co.look; *fov = g_co.fov; return; }
+    if (g_sc.on) {
+        Vec3 te = g_sc.to_eye, tl = g_sc.to_look;
+        float tf = g_sc.to_fov;
+        if (g_sc.to_field) field_or_dialog(&te, &tl, &tf);
+        const float w = g_sc.len > 0 ? smooth01((float)g_sc.t / (float)g_sc.len) : 1.0f;
+        *eye = lerp(g_sc.from_eye, te, w); *look = lerp(g_sc.from_look, tl, w); *fov = g_sc.from_fov + (tf - g_sc.from_fov) * w;
+        return;
+    }
+    field_or_dialog(eye, look, fov);
+}
+
+static void current_camera(Camera* cam) {
+    Vec3 eye, look;
+    float fov;
+    current_eye_look(&eye, &look, &fov);
     camera_look(cam, eye, look, fov);
 }
 
-// ---------------------------------------------------------------------------- lifecycle
-static void bake_look(int k, int clip_idle_embedded, int clip_idle_library) {
-    LookRt& lk = g_look[k];
-    if (lk.model < 0) return;
-    const dmf::Model& m = models_at(lk.model).m;
-    static int pool_used = 0;
-    if (pool_used + m.h->num_verts * ENEMY_YAW_BUCKETS > ENEMY_YAW_BUCKETS * LIT_POOL_VERTS) {
-        eng::dbg_print("field3d: character lighting pool full");
+// The point the props' cheap 2D range test centres on: the follow camera's focus, or the ground under the look-at
+// point of a scripted / override camera.
+static void view_focus(float* fx, float* fz) {
+    if (g_co.on || g_sc.on) {
+        Vec3 e, l;
+        float fov;
+        current_eye_look(&e, &l, &fov);
+        *fx = l.x; *fz = l.z;
         return;
     }
-    static dmf::Pose pose;
-    static Mat34 skin[dmf::MAX_BONES];
-    if (clip_idle_library >= 0 && lk.bound) anim::sample(*g_lib, lk.bind, m, clip_idle_library, 0.0f, &pose);
-    else dmf::pose_sample(m, clip_idle_embedded, 0.0f, &pose);
-    dmf::pose_skin(m, pose, skin);
+    *fx = g_v.focus.x; *fz = g_v.focus.z;
+}
+
+void field3d_cam_shot(int shot, int ticks) {
+    const FieldState& f = field_state();
+    Vec3 e, l;
+    float fov;
+    current_eye_look(&e, &l, &fov);
+    g_sc.from_eye = e; g_sc.from_look = l; g_sc.from_fov = fov;
+    g_sc.t = 0; g_sc.len = ticks > 0 ? ticks : 0;
+    if (shot < 0 || shot >= f.shots.size()) {
+        if (!g_sc.on) return;                               // already on the field camera
+        g_sc.to_field = true;
+        if (g_sc.len == 0) g_sc.on = false;
+        else g_sc.on = true;
+        return;
+    }
+    const Shot& sh = f.shots[shot];
+    g_sc.on = true; g_sc.to_field = false;
+    g_sc.to_eye = v3(sh.eye[0], sh.eye[1], sh.eye[2]); g_sc.to_look = v3(sh.look[0], sh.look[1], sh.look[2]); g_sc.to_fov = sh.fov;
+}
+bool field3d_cam_busy() { return g_sc.on && g_sc.t < g_sc.len; }
+bool field3d_cam_scripted() { return g_sc.on; }
+void field3d_cam_release() { g_sc.on = false; }
+void field3d_set_camera(const float eye[3], const float look[3], float fov) {
+    g_co.on = true; g_co.eye = v3(eye[0], eye[1], eye[2]); g_co.look = v3(look[0], look[1], look[2]); g_co.fov = fov;
+}
+void field3d_clear_camera() { g_co.on = false; }
+void field3d_show_actors(bool hero, bool entities) { g_show_hero = hero; g_show_ents = entities; }
+
+// ---------------------------------------------------------------------------- lifecycle
+// ---------------------------------------------------------------------------- character lighting (baked per yaw)
+// The pool is split once at init (fixed pointers); a preset change re-bakes in place (slice 3D-6).
+static int g_pool_used = 0;
+static dmf::Pose g_bake_pose;
+static Mat34 g_bake_skin[dmf::MAX_BONES];
+
+static void alloc_look(int k) {
+    LookRt& lk = g_look[k];
+    if (lk.model < 0 || LOOKS[k].is_static) return;
+    for (int j = 0; j < k; ++j)                                   // the same model as an earlier look: share its colours
+        if (g_look[j].model == lk.model && !LOOKS[j].is_static && g_look[j].lit[0]) {
+            lk.shares = j;
+            for (int b = 0; b < ENEMY_YAW_BUCKETS; ++b) lk.lit[b] = g_look[j].lit[b];
+            return;
+        }
+    const dmf::Model& m = models_at(lk.model).m;
+    if (g_pool_used + m.h->num_verts * ENEMY_YAW_BUCKETS > ENEMY_YAW_BUCKETS * LIT_POOL_VERTS) {
+        eng::dbg_print("field3d: character lighting pool full");
+        lk.model = -1;
+        return;
+    }
+    for (int b = 0; b < ENEMY_YAW_BUCKETS; ++b) { lk.lit[b] = g_lit_pool + g_pool_used; g_pool_used += m.h->num_verts; }
+}
+
+static void bake_pose(int k) {
+    const LookRt& lk = g_look[k];
+    const dmf::Model& m = models_at(lk.model).m;
+    if (lk.idle_library >= 0 && lk.bound) anim::sample(*g_lib, lk.bind, m, lk.idle_library, 0.0f, &g_bake_pose);
+    else dmf::pose_sample(m, lk.idle_embedded, 0.0f, &g_bake_pose);
+    dmf::pose_skin(m, g_bake_pose, g_bake_skin);
+}
+
+// One yaw bucket of a look under the current preset (the pose's skin matrices in g_bake_skin).
+static void bake_bucket(int k, int b) {
+    const LookRt& lk = g_look[k];
+    const dmf::Model& m = models_at(lk.model).m;
+    prelight_posed(m, g_bake_skin, 6.28318531f * (float)b / ENEMY_YAW_BUCKETS, g_light, lk.lit[b]);
     int eye0 = 0, eyes = 0;
     models_glow_range(m, &eye0, &eyes);
-    for (int b = 0; b < ENEMY_YAW_BUCKETS; ++b) {
-        lk.lit[b] = g_lit_pool + pool_used;
-        pool_used += m.h->num_verts;
-        prelight_posed(m, skin, 6.28318531f * (float)b / ENEMY_YAW_BUCKETS, default_light(), lk.lit[b]);
-        for (int i = eye0; i < eye0 + eyes; ++i) lk.lit[b][i] = m.verts[i].argb;     // the skeletons' eyes glow (unlit)
+    if ((g_lp.colour & 0xFFFFFFu) != 0xFFFFFFu)
+        for (int i = 0; i < m.h->num_verts; ++i) lk.lit[b][i] = rgb_mul(lk.lit[b][i], g_lp.colour);
+    for (int i = eye0; i < eye0 + eyes; ++i) lk.lit[b][i] = m.verts[i].argb;         // the skeletons' eyes glow (unlit)
+}
+
+static void bake_hero_bucket(int b) {
+    const dmf::Model& m = models_at(g_knight).m;
+    prelight_posed(m, g_bake_skin, 6.28318531f * (float)b / HERO_YAW_BUCKETS, g_light, g_hero_lit[b]);
+    if ((g_lp.colour & 0xFFFFFFu) != 0xFFFFFFu)
+        for (int i = 0; i < m.h->num_verts; ++i) g_hero_lit[b][i] = rgb_mul(g_hero_lit[b][i], g_lp.colour);
+}
+
+static void hero_bake_pose() {
+    dmf::pose_sample(models_at(g_knight).m, g_hero_clips.idle, 0.0f, &g_bake_pose);
+    dmf::pose_skin(models_at(g_knight).m, g_bake_pose, g_bake_skin);
+}
+
+// The re-bake queue: item 0..HERO_YAW_BUCKETS-1 = the hero, then 16 per look (own colours only). A full bake runs
+// them all now (map loads, under a fade); after a light lerp they run a few per tick while the characters stay lit
+// per frame (no frame over budget: docs/NEXT_SLICE_BARROW.md 5.6).
+static int bake_items() { return HERO_YAW_BUCKETS + ELOOK_COUNT * ENEMY_YAW_BUCKETS; }
+static bool bake_item(int it) {                                   // false: nothing to bake for this item
+    if (it < HERO_YAW_BUCKETS) {
+        if (!g_hero_lit_ok) return false;
+        hero_bake_pose();                                          // cheap next to the bucket (no state kept between items)
+        bake_hero_bucket(it);
+        return true;
+    }
+    it -= HERO_YAW_BUCKETS;
+    const int k = it / ENEMY_YAW_BUCKETS, b = it % ENEMY_YAW_BUCKETS;
+    const LookRt& lk = g_look[k];
+    if (lk.model < 0 || LOOKS[k].is_static || lk.shares >= 0) return false;
+    bake_pose(k);
+    bake_bucket(k, b);
+    return true;
+}
+static void bake_all() {
+    for (int it = 0; it < bake_items(); ++it) bake_item(it);
+    g_bake_next = -1;
+    g_chars_dynamic = false;
+}
+
+// Every static colour set under the current preset (a preset change; lerp steps).
+static void relight_statics() { for (int i = 0; i < g_nlit; ++i) light_static(g_lit[i]); }
+
+static void apply_fog() {
+    if (g_lp.fog) eng::set_fog(true, g_lp.fog_rgb, g_lp.fog_start, g_lp.fog_end);
+    else eng::set_fog(false, 0, 0.0f, 0.0f);
+}
+
+void field3d_set_light(int preset) {
+    g_lerp.on = false;
+    g_lp_id = preset;
+    g_lp = light_get(preset);
+    g_light = light_of(g_lp);
+    if (!g_inited) return;
+    relight_statics();
+    bake_all();
+}
+
+void field3d_light_lerp(int from, int to, int ticks) {
+    g_lerp.on = true; g_lerp.from = from; g_lerp.to = to; g_lerp.t = 0; g_lerp.len = ticks > 0 ? ticks : 1;
+    g_lp_id = to;
+    light_mix(light_get(from), light_get(to), 0.0f, &g_lp);
+    g_light = light_of(g_lp);
+    g_chars_dynamic = true;
+    g_bake_next = -1;
+    relight_statics();
+}
+
+int field3d_light_preset() { return g_lp_id; }
+bool field3d_light_busy() { return g_lerp.on || g_bake_next >= 0; }
+
+// One tick of a lerp: every 8 ticks (and at its end) the blend is applied to the props, the ground, the fog;
+// characters are lit per frame meanwhile, then re-baked a few buckets per tick.
+static void light_tick() {
+    if (g_lerp.on) {
+        ++g_lerp.t;
+        const bool end = g_lerp.t >= g_lerp.len;
+        if (end || g_lerp.t % 8 == 0) {
+            light_mix(light_get(g_lerp.from), light_get(g_lerp.to), end ? 1.0f : (float)g_lerp.t / (float)g_lerp.len, &g_lp);
+            g_light = light_of(g_lp);
+            relight_statics();
+        }
+        if (end) { g_lerp.on = false; g_bake_next = 0; }
+        return;
+    }
+    if (g_bake_next >= 0) {
+        // two yaw buckets per tick (~4k vertices, ~0.25 M SH4 instructions): no frame over budget while it runs
+        for (int done = 0; done < 2 && g_bake_next < bake_items();) { if (bake_item(g_bake_next++)) ++done; }
+        if (g_bake_next >= bake_items()) { g_bake_next = -1; g_chars_dynamic = false; }
     }
 }
 
 void field3d_init() {
     if (!g_inited) {
         g_inited = true;
+        if (g_lp.name[0] == '\0') { g_lp = light_get(0); g_light = light_of(g_lp); }
         eng::set_clear_color(CLEAR_RGB);
         g_lib = anim::shared_library();
         g_knight = model_get("knight");
         g_fence = model_get("fence");
         g_tree = model_get("tree");
         g_hero_clips = clips_of(g_knight);
-        if (g_knight >= 0 && models_at(g_knight).m.h->num_verts <= MAX_CHAR_VERTS) {
-            static dmf::Pose pose;
-            static Mat34 skin[dmf::MAX_BONES];
-            dmf::pose_sample(models_at(g_knight).m, g_hero_clips.idle, 0.0f, &pose);
-            dmf::pose_skin(models_at(g_knight).m, pose, skin);
-            for (int b = 0; b < HERO_YAW_BUCKETS; ++b)
-                prelight_posed(models_at(g_knight).m, skin, 6.28318531f * (float)b / HERO_YAW_BUCKETS, default_light(), g_hero_lit[b]);
-            g_hero_lit_ok = true;
-        }
+        g_hero_lit_ok = g_knight >= 0 && models_at(g_knight).m.h->num_verts <= MAX_CHAR_VERTS;
         if (g_lib && g_knight >= 0) g_knight_bound = anim::bind(*g_lib, models_at(g_knight).m, &g_knight_bind);
         g_clip_interact = g_lib ? anim::clip_find(*g_lib, "interact") : -1;
+        g_clip_awaken = g_lib ? anim::clip_find(*g_lib, "skel_awaken") : -1;
         for (int k = 0; k < ELOOK_COUNT; ++k) {
             LookRt& lk = g_look[k];
             memset(&lk, 0, sizeof lk);
+            lk.shares = -1; lk.idle_embedded = -1; lk.idle_library = -1;
             lk.model = model_get(LOOKS[k].model);
+            lk.scale = ENEMY_SCALE * LOOKS[k].scale;
             if (lk.model < 0) continue;
             const dmf::Model& m = models_at(lk.model).m;
+            lk.top = m.h->bmax[1] * lk.scale;
+            if (LOOKS[k].is_static) { lk.clips = clips_of(-1); continue; }   // drawn as a prop (its colours: lit_colors)
             if (m.h->num_verts > MAX_CHAR_VERTS) { lk.model = -1; continue; }
             lk.bound = g_lib && anim::bind(*g_lib, m, &lk.bind);
-            lk.top = m.h->bmax[1] * ENEMY_SCALE;
             if (LOOKS[k].library) {
                 lk.clips = g_hero_clips;                          // the Knight's walk stride: the same rig
                 lk.clips.idle = g_lib ? anim::clip_find(*g_lib, "idle_a") : -1;
@@ -658,12 +895,14 @@ void field3d_init() {
                 lk.clips.run = -1;
                 if (lk.clips.walk >= 0) lk.clips.walk_len = (float)anim::clip_ticks(*g_lib, lk.clips.walk) / 60.0f;
                 if (!lk.bound || lk.clips.idle < 0) { lk.model = -1; eng::dbg_print("field3d: an NPC model could not be bound to the animation library"); continue; }
-                bake_look(k, -1, lk.clips.idle);
+                lk.idle_library = lk.clips.idle;
             } else {
                 lk.clips = clips_of(lk.model);
-                bake_look(k, lk.clips.idle, -1);
+                lk.idle_embedded = lk.clips.idle;
             }
+            alloc_look(k);
         }
+        bake_all();
         eng::boot_log("field3d: characters loaded and lit");
         g_shadow_mat = eng::material_create(0, eng::MAT_TRANSLUCENT);
         if (text_texture()) g_bill_mat = eng::material_create(text_texture(), eng::MAT_TRANSLUCENT | eng::MAT_BILINEAR);
@@ -689,6 +928,7 @@ void field3d_reset() {
         g_v.ent[i].idle_t = 0.37f * (float)i;                       // desynchronise the idles
     }
     for (int i = 0; i < g_nstatics; ++i) g_statics[i].alpha = 1.0f;
+    g_sc.on = false;                                                // slice 3D-6: a retry / map load ends any script camera
 }
 
 void field3d_set_marker(int i, int kind) { if (i >= 0 && i < MAX_ENTITIES) g_v.marker[i] = kind; }
@@ -699,6 +939,7 @@ void field3d_play(int actor, int clip) {
     Overlay& ov = g_v.ov[actor];
     if (!ov.on && ov.w <= 0.0f) anim::animator_init(ov.an, clip);
     anim::play(ov.an, *g_lib, clip, 0.15f, -1);
+    if (actor > 0) g_v.woken[actor - 1] = true;                     // slice 3D-6: an `asleep` entity rises
     ov.on = true;
 }
 
@@ -727,6 +968,11 @@ void field3d_tick() {
     const FieldState& f = field_state();
     const Hero& h = f.hero;
     ++g_v.clock;
+    light_tick();                                                   // slice 3D-6: a light lerp, re-bakes
+    if (g_sc.on) {
+        if (g_sc.t < g_sc.len) ++g_sc.t;
+        if (g_sc.to_field && g_sc.t >= g_sc.len) g_sc.on = false;
+    }
     float hx, hz;
     hero_world(h, &hx, &hz);
     float dx = hx - g_v.prev_x, dz = hz - g_v.prev_z;
@@ -792,7 +1038,7 @@ void field3d_tick() {
     float px_[2] = { hx, 0 }, pz_[2] = { hz, 0 };
     const int npc_seen = dialog_npc();
     if (dialog_cam_weight() > 0.0f && npc_seen >= 0 && npc_seen < f.ents.size()) { entity_world(npc_seen, &px_[1], &pz_[1]); n_who = 2; }
-    else n_who = 1;
+    else n_who = g_show_hero ? 1 : 0;                              // slice 3D-6: no one on the title's backdrop: nothing fades
     for (int k = 0; k < n_who; ++k) {
         Who& w = who[k];
         w.x = px_[k]; w.z = pz_[k];
@@ -948,6 +1194,7 @@ static void draw_ground(const Camera& cam) {
     if (x1 <= x0 || z1 <= z0 || x1 - x0 + 1 > MAX_GRID_W) return;
     eng::Vert3* out = eng::vtx_begin((x1 - x0) * (z1 - z0) * 5);   // bound: a near-clipped quad has up to 5 corners
     if (!out) return;
+    const uint32_t tint = 0xFF000000u | g_lp.tint;                 // slice 3D-6: the light preset's tint (day: white)
     static GridPt rows[2][MAX_GRID_W];
     GridPt* top = rows[0];
     GridPt* bot = rows[1];
@@ -964,7 +1211,7 @@ static void draw_ground(const Camera& cam) {
         o.flags = flags;
         o.x = g.x; o.y = g.y; o.z = g.z;
         o.u = in ? g.u : pu; o.v = in ? g.v : pv;
-        o.argb = 0xFFFFFFFFu; o.oargb = 0;
+        o.argb = tint; o.oargb = 0;
     };
     for (int z = z0; z < z1; ++z) {
         ground_row(cam, z + 1, x0, x1, bot);
@@ -992,8 +1239,8 @@ static void draw_ground(const Camera& cam) {
                 put(d, eng::VERT, in); put(c, eng::VERT, in);
             } else if (!all_front && (a.front || b.front || c.front || d.front)) {
                 const float u0 = in ? a.u : pu, u1 = in ? c.u : pu, v0 = in ? a.v : pv, v1 = in ? c.v : pv;
-                PolyVert pq[4] = { { a.p, u0, v0, 0xFFFFFFFFu }, { b.p, u0, v1, 0xFFFFFFFFu },
-                                   { c.p, u1, v1, 0xFFFFFFFFu }, { d.p, u1, v0, 0xFFFFFFFFu } };
+                PolyVert pq[4] = { { a.p, u0, v0, tint }, { b.p, u0, v1, tint },
+                                   { c.p, u1, v1, tint }, { d.p, u1, v0, tint } };
                 used += emit_poly(cam, pq, 4, out + used);
             }
         }
@@ -1005,7 +1252,8 @@ static void draw_ground(const Camera& cam) {
 
 // ---------------------------------------------------------------------------- draw
 static void draw_statics(const Camera& cam) {
-    const float fx = g_v.focus.x, fz = g_v.focus.z;
+    float fx, fz;
+    view_focus(&fx, &fz);
     for (int i = 0; i < g_nstatics; ++i) {
         // Every instance is visited each frame (~180 x 76 bytes, more than a third of the operand
         // cache, evicted by the frame's vertex traffic): request the one four ahead (PREF), as most
@@ -1058,7 +1306,7 @@ static bool actor_head(int a, Vec3* p) {
 }
 
 static void draw_billboards_all(const Camera& cam) {
-    if (!g_bill_mat) return;
+    if (!g_bill_mat || !g_show_ents) return;                       // slice 3D-6: the title's backdrop shows no one
     const FieldState& f = field_state();
     Billboard bb[MAX_ACTORS_3D + MAX_ENTITIES];
     int n = 0, nm = 0, ne = 0;
@@ -1093,29 +1341,61 @@ static void draw_billboards_all(const Camera& cam) {
     g_v.n_markers = nm; g_v.n_emotes = ne;
 }
 
-// 'A Talk' over the NPC the prompt points at (GDD 7.2), in the dialog font; z 2.3 (above the 3D scene).
+// 'A Talk' over the NPC the prompt points at (GDD 7.2), in the UI font (uitext.h); z 2.3 (above the 3D scene).
 static void draw_prompt(const Camera& cam) {
     const int i = g_v.prompt && !dialog_open() ? field_talk_target() : -1;
     Vec3 p;
     if (i < 0 || !actor_head(1 + i, &p)) return;
     float sx, sy;
     if (!project(cam, p + v3(0, MARK_LIFT, 0), &sx, &sy)) return;
-    const char* label = "Talk";
-    const float tw = (float)text_width(label);
-    const float w = 16.0f + 6.0f + tw + 14.0f, h = 24.0f;
+    const char* label = "TALK";
+    const float tw = ui_text_width(UF_S, label);
+    const float w = 4.0f + 22.0f + 5.0f + tw + 10.0f, h = 28.0f;
     const float x = (float)(int)(sx - w * 0.5f), y = (float)(int)(sy - h * 0.5f);
     eng::gfx_rect_tr(x, y, w, h, 0xB0000000u, 2.3f);
-    icon_draw_tint(ICON_PAD_A, x + 7.0f + 8.0f, y + h * 0.5f, ICON_1X, 0xFFFFFFFFu, 2.35f);
-    text_draw(x + 7.0f + 16.0f + 6.0f, y + 5.0f, label, 0xFFFFFFFFu, 2.4f, -1, true);
+    ui_icon(UI_PAD_A, x + 4.0f + 11.0f, y + h * 0.5f, 22.0f, 0xFFFFFFFFu, 2.35f);
+    ui_text(UF_S, x + 4.0f + 22.0f + 5.0f, y + 7.0f, label, 0xFFFFFFFFu, 2.4f);
+}
+
+// Slice 3D-6: the map's glows (the open exit, the boss ring, the barrow's rune ring): additive decals from the
+// battle's FX atlas, pulsing over 90 ticks.
+static void draw_glows(const Camera& cam) {
+    const FieldState& f = field_state();
+    GroundQuad q[MAX_GLOWS * 2];
+    int n = 0;
+    eng::Material mat = 0;
+    float uvg[4], uvr[4];
+    if (!battle3d_fx(0, &mat, uvg) || !battle3d_fx(1, &mat, uvr)) return;
+    const float pulse = 0.75f + 0.25f * shz_sinf(6.28318531f * (float)(g_v.clock % 90) / 90.0f);
+    for (int i = 0; i < f.glows.size(); ++i) {
+        const Glow& g = f.glows[i];
+        if (!g.on) continue;
+        const uint32_t a = (uint32_t)(pulse * 255.0f);
+        GroundQuad& d = q[n++];
+        d.c = v3(g.x, 0.03f, g.z); d.half = g.r; d.rot = 0.0f;
+        const float* uv = g.ring ? uvr : uvg;
+        d.u0 = uv[0]; d.v0 = uv[1]; d.u1 = uv[2]; d.v1 = uv[3];
+        d.argb = a << 24 | (g.rgb & 0xFFFFFFu);
+        if (g.ring) {                                                  // a soft glow under the ring
+            GroundQuad& e = q[n++];
+            e = d; e.half = g.r * 0.85f; e.c.y = 0.02f;
+            e.u0 = uvg[0]; e.v0 = uvg[1]; e.u1 = uvg[2]; e.v1 = uvg[3];
+            e.argb = (a / 2) << 24 | (g.rgb & 0xFFFFFFu);
+        }
+    }
+    if (n) draw_ground_quads(cam, mat, q, n);
 }
 
 void field3d_draw() {
     const FieldState& f = field_state();
     stats_reset();
-    eng::set_clear_color(g_gv.mat ? g_gv.outer_rgb : CLEAR_RGB);   // the battle sets its sky colour; restore ours (the outer ground)
+    // the battle sets its sky colour; restore ours: the preset's, or the outer ground under its tint (day: as before)
+    eng::set_clear_color(g_lp.clear_ground ? rgb_mul(g_gv.mat ? g_gv.outer_rgb : CLEAR_RGB, g_lp.tint) : g_lp.clear);
+    apply_fog();                                                   // slice 3D-6 (eng::set_fog is cheap when unchanged)
     Camera cam;
     current_camera(&cam);
-    const Light light = default_light();
+    const Light light = g_light;
+    const uint32_t dyn_tint = 0xFF000000u | g_lp.colour;            // characters lit per frame (a light lerp)
 
     // Characters first, scenery last: if the frame's vertex arena ever fills up, it is props that
     // drop out, never the hero (the z-buffer makes the order irrelevant to the picture).
@@ -1124,65 +1404,82 @@ void field3d_draw() {
     // entities: skeletons (their field clips), Wren and Brom (the shared library), a gesture on top
     static dmf::Pose pose;
     static Mat34 skin[dmf::MAX_BONES];
-    for (int i = 0; i < f.ents.size(); ++i) {
+    cel_hull_next(cel().chars >= 0.5f && cel().chars < 1.5f, cel().props >= 0.5f);   // cel prototype (CEL_SHADING_STUDY.md)
+    for (int i = 0; i < f.ents.size() && g_show_ents; ++i) {
         const Entity& e = f.ents[i];
         if (!e.alive || e.hidden) continue;
         const LookRt& lk = g_look[e.look];
         float x, z;
         entity_world(i, &x, &z);
+        if (lk.model >= 0 && LOOKS[e.look].is_static) {            // slice 3D-6: the waystone (a prop that talks)
+            const Mat34 world = mat_trs_y(v3(x, 0, z), dir_yaw(e.home_dir), lk.scale, lk.scale, lk.scale);   // a stone never turns
+            const uint32_t* cols = lit_colors(lk.model, dir_yaw(e.home_dir), world);
+            if (cols) draw_static(cam, models_at(lk.model).gfx, world, cols);
+            draw_blob_shadow(cam, g_shadow_mat, v3(x, 0, z), 0.5f * lk.scale / 0.66f, (int)SHADOW_ALPHA);
+            continue;
+        }
         if (lk.model >= 0) {
             const dmf::Model& m = models_at(lk.model).m;
-            if (LOOKS[e.look].library) library_pose(lk, m, g_v.ent[i], &pose);
-            else locomotion_pose(m, lk.clips, g_v.ent[i], &pose);
-            if (lk.bound) overlay_pose(g_v.ov[1 + i], lk.bind, m, &pose);
+            if (e.asleep && !g_v.woken[i] && lk.bound && g_clip_awaken >= 0) {
+                anim::sample(*g_lib, lk.bind, m, g_clip_awaken, 0.0f, &pose);   // lying in the ring until the intro
+            } else {
+                if (LOOKS[e.look].library) library_pose(lk, m, g_v.ent[i], &pose);
+                else locomotion_pose(m, lk.clips, g_v.ent[i], &pose);
+                if (lk.bound) overlay_pose(g_v.ov[1 + i], lk.bind, m, &pose);
+            }
             dmf::pose_skin(m, pose, skin);
             const int bucket = yaw_bucket(g_v.ent_yaw[i], ENEMY_YAW_BUCKETS);
-            draw_model(cam, light, models_at(lk.model).gfx, mat_trs_y(v3(x, 0, z), g_v.ent_yaw[i], ENEMY_SCALE, ENEMY_SCALE, ENEMY_SCALE), skin,
-                       0xFFFFFFFFu, lk.lit[bucket]);
+            draw_model(cam, light, models_at(lk.model).gfx, mat_trs_y(v3(x, 0, z), g_v.ent_yaw[i], lk.scale, lk.scale, lk.scale), skin,
+                       g_chars_dynamic ? dyn_tint : 0xFFFFFFFFu, g_chars_dynamic ? nullptr : lk.lit[bucket]);
         }
-        draw_blob_shadow(cam, g_shadow_mat, v3(x, 0, z), 0.55f * ENEMY_SCALE / 0.8f, (int)SHADOW_ALPHA);
+        draw_blob_shadow(cam, g_shadow_mat, v3(x, 0, z), 0.55f * lk.scale / 0.8f, (int)SHADOW_ALPHA);
     }
 
     // hero
     float hx, hz;
     hero_world(f.hero, &hx, &hz);
-    if (g_knight >= 0) {
+    cel_hull_next(cel().chars >= 0.5f, cel().props >= 0.5f);                  // the hero: chars 1 (all) or 2 (hero only)
+    if (g_knight >= 0 && g_show_hero) {
         const dmf::Model& m = models_at(g_knight).m;
         locomotion_pose(m, g_hero_clips, g_v.hero, &pose);
         if (g_knight_bound) overlay_pose(g_v.ov[0], g_knight_bind, m, &pose);
         dmf::pose_skin(m, pose, skin);
-        const uint32_t* lit = (g_hero_lit_ok && HERO_DYN_LIGHT < 0.5f) ? g_hero_lit[yaw_bucket(g_v.yaw, HERO_YAW_BUCKETS)] : nullptr;
+        const uint32_t* lit = (g_hero_lit_ok && HERO_DYN_LIGHT < 0.5f && !g_chars_dynamic) ? g_hero_lit[yaw_bucket(g_v.yaw, HERO_YAW_BUCKETS)] : nullptr;
         draw_model(cam, light, models_at(g_knight).gfx, mat_trs_y(v3(hx, 0, hz), g_v.yaw, HERO_SCALE, HERO_SCALE, HERO_SCALE), skin,
-                   0xFFFFFFFFu, lit);
+                   lit ? 0xFFFFFFFFu : dyn_tint, lit);
     }
-    draw_blob_shadow(cam, g_shadow_mat, v3(hx, 0, hz), 0.62f * HERO_SCALE / 0.8f, (int)SHADOW_ALPHA);
+    if (g_show_hero) draw_blob_shadow(cam, g_shadow_mat, v3(hx, 0, hz), 0.62f * HERO_SCALE / 0.8f, (int)SHADOW_ALPHA);
 
+    cel_hull_next(false, cel().props >= 0.5f);
     draw_statics(cam);
+    cel_hull_next(false, false);
+    draw_glows(cam);
     draw_billboards_all(cam);
     draw_prompt(cam);
-    if (g_knight < 0) font_draw(20, 440, "HERO MODEL MISSING  SEE SERIAL LOG", 2, 0xFFFFCD75, true, 7.5f);
+    if (g_knight < 0) ui_text(UF_S, 20, 440, "HERO MODEL MISSING  SEE SERIAL LOG", 0xFFFFCD75, 7.5f);
 }
 
 void field3d_draw_hud(int hero_hp, int hero_hp_max, int potions, bool token, const char* objective, bool show) {
     if (!show) return;
-    // hero HP (top right, 5x7 font)
+    // hero HP (top right; the UI font, docs/UI_ART.md)
     char hud[24];
     snprintf(hud, sizeof hud, "HP %d/%d", hero_hp, hero_hp_max);
     eng::gfx_rect_tr(500, 12, 128, 28, 0xA0000000, 2.0f);
-    font_draw(510, 18, hud, 2, hero_hp * 4 > hero_hp_max ? 0xFFF4F4F4 : 0xFFEF7D57, true, 2.2f);
+    ui_text(UF_S, 510, 19, "HP", 0xFFFFCD75, 2.2f);
+    ui_text(UF_S, 618, 19, hud + 3, hero_hp * 4 > hero_hp_max ? 0xFFF4F4F4 : 0xFFEF7D57, 2.2f, 1.0f, UA_RIGHT);
     // the inventory under it (slice 3D-5; GDD 1.2: potions, plus the quest's token): the potion icon and the
     // count (greyed at 0), Wren's token once given
     snprintf(hud, sizeof hud, "X%d", potions);
-    eng::gfx_rect_tr(500, 42, 128, 24, 0xA0000000, 2.0f);
-    icon_draw_tint(ICON_POTION, 518, 54, ICON_1X, potions > 0 ? 0xFFFFFFFFu : 0x90808080u, 2.1f);
-    font_draw(530, 48, hud, 2, potions > 0 ? 0xFFF0A0A0 : 0xFF808080, true, 2.2f);
-    if (token && text_ready()) text_icon_draw(TI_TOKEN, 608, 54, 1.0f, 0xFFFFFFFFu, 2.1f);
-    // the objective (top left, dialog font; GDD 10.2 / App. B)
-    if (objective && objective[0] && text_ready()) {
-        const float w = (float)text_width(objective) + 24.0f;
-        eng::gfx_rect_tr(16, 14, w, 26, 0xA0000000, 2.0f);
-        eng::gfx_rect_tr(16, 14, 3, 26, 0xFFE8B848, 2.05f);
-        text_draw(28, 20, objective, 0xFFFFF0C8, 2.2f, -1, true);
+    eng::gfx_rect_tr(500, 42, 128, 26, 0xA0000000, 2.0f);
+    ui_icon(UI_POTION_S, 516, 55, 24.0f, potions > 0 ? 0xFFFFFFFFu : 0x90808080u, 2.1f);
+    ui_text(UF_S, 532, 48, hud, potions > 0 ? 0xFFF0A0A0 : 0xFF808080, 2.2f);
+    if (token) ui_icon(UI_TOKEN, 610, 55, 24.0f, 0xFFFFFFFFu, 2.1f);
+    // the objective (top left; GDD 10.2 / App. B)
+    if (objective && objective[0]) {
+        const float w = ui_text_width(UF_S, objective) + 24.0f;
+        eng::gfx_rect_tr(16, 14, w, 28, 0xA0000000, 2.0f);
+        eng::gfx_rect_tr(16, 14, 3, 28, 0xFFE8B848, 2.05f);
+        ui_text(UF_S, 28, 21, objective, 0xFFFFF0C8, 2.2f);
     }
 }
 

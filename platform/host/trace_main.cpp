@@ -16,6 +16,8 @@
 //   --probe-cam           the dialog two-shot from every walkable tile around each NPC (C lines)
 //   --skills N            battle-test party skills (bit set; 0 = Fire not learned)
 //   --resources           after the boot: D line with texture slots, VRAM, materials, model arena, library, script pools
+//   --sprite-queues       at the end: D line with the KOS sprite queues mirrored (per texture: peak per frame vs reserved;
+//                         overflow draws = a std::vector growth, i.e. a heap allocation after the boot, on the Dreamcast)
 //   --sweep               frame cost with the hero on every walkable tile (the boot's entities; the camera and the
 //                         fades settled; after 90 ticks, past the boot fade-in): S <x> <y> out=<submitted> xf=<transformed>
 //                         arena=<written> drops=<n> statics=<drawn> near=<crossing the near plane> models=<drawn> lines
@@ -35,6 +37,8 @@
 #include "../../src/dmf.h"
 #include "../../src/status.h"
 #include "../../src/skills.h"
+#include "../../src/lights.h"
+#include "../../src/screens.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,9 +52,11 @@ extern uint32_t    g_buttons;
 extern int         g_axis[2];
 extern const char* g_romdisk;
 extern const char* g_dump_dir;
+extern bool        g_audio_trace;   // host_engine.cpp: `A` lines (audio hooks) in --story traces
 extern int         g_alloc_watch;   // host_engine.cpp (-DHOST_ALLOC_COUNT): the per-tick allocation counter
 extern long        g_alloc_count;
 void host_frame_begin(int tick, bool dump);
+void host_queue_report(FILE* f);   // host_engine.cpp: the KOS sprite-queue mirror (--sprite-queues)
 void host_frame_end();
 int  host_arena_used();
 int  host_batches();
@@ -130,7 +136,13 @@ int main(int argc, char** argv) {
     bool story = false, dump_scripts = false, probe_talk = false, probe_cam = false;
     int skills = -1;
     const char* text_widths = nullptr;
-    bool resources = false, sweep = false;
+    bool resources = false, sweep = false, boot = false, sprite_queues = false;
+    static float probe_views[32][7];
+    int n_probe_views = 0;
+    const char* path_sweep = nullptr;
+    static char place_id[8][16];
+    static int place_xy[8][2];
+    int n_places = 0;
     for (int i = 3; i < argc; ++i) {
         if (!strcmp(argv[i], "--battle-test") && i + 1 < argc) battle_test = argv[++i];
         else if (!strcmp(argv[i], "--map") && i + 1 < argc) map = argv[++i];
@@ -180,7 +192,19 @@ int main(int argc, char** argv) {
         else if (!strcmp(argv[i], "--skills") && i + 1 < argc) skills = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--text-widths") && i + 1 < argc) text_widths = argv[++i];
         else if (!strcmp(argv[i], "--resources")) resources = true;
+        else if (!strcmp(argv[i], "--sprite-queues")) sprite_queues = true;
         else if (!strcmp(argv[i], "--sweep")) sweep = true;
+        else if (!strcmp(argv[i], "--boot")) boot = true;            // slice 3D-6: the Dreamcast's start (title, T1)
+        else if (!strcmp(argv[i], "--probe-view") && i + 1 < argc) {   // slice 3D-6: the cost of a camera ("ex ey ez lx ly lz fov")
+            float* v = probe_views[n_probe_views];
+            if (n_probe_views < 32 && sscanf(argv[++i], "%f %f %f %f %f %f %f", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6]) == 7) ++n_probe_views;
+            else { fprintf(stderr, "bad --probe-view\n"); return 2; }
+        }
+        else if (!strcmp(argv[i], "--path") && i + 1 < argc) path_sweep = argv[++i];   // slice 3D-6: title | credits
+        else if (!strcmp(argv[i], "--place") && i + 1 < argc) {        // with --probe-view: "id x y" (an entity, or rowan)
+            if (n_places < 8 && sscanf(argv[++i], "%15s %d %d", place_id[n_places], &place_xy[n_places][0], &place_xy[n_places][1]) == 3) ++n_places;
+            else { fprintf(stderr, "bad --place\n"); return 2; }
+        }
         else { fprintf(stderr, "unknown option %s\n", argv[i]); return 2; }
     }
     if (route) {
@@ -192,7 +216,7 @@ int main(int argc, char** argv) {
     struct In { unsigned b; int ax, ay; };
     std::vector<In> frames;
     FILE* in = strcmp(argv[1], "-") ? fopen(argv[1], "r") : nullptr;   // "-": no input file (bot runs)
-    if (!in && !bot && !dump_scripts && !probe_talk && !probe_cam && !text_widths && !sweep) { perror(argv[1]); return 1; }
+    if (!in && !bot && !dump_scripts && !probe_talk && !probe_cam && !text_widths && !sweep && !n_probe_views && !path_sweep) { perror(argv[1]); return 1; }
     char line[128];
     while (in && fgets(line, sizeof line, in)) {
         if (line[0] == '#' || line[0] == '\n') continue;
@@ -211,7 +235,9 @@ int main(int argc, char** argv) {
     if (!g_trace) { perror(argv[2]); return 1; }
 
     fprintf(g_trace, "F boot\n");
+    if (story) g_audio_trace = true;
     if (battle_test) bt::game_init_battle_test(battle_test, skills);
+    else if (boot || path_sweep) { if (!bt::game_boot()) fprintf(stderr, "boot failed (see D lines in the trace)\n"); }
     else if (!bt::game_init(map)) fprintf(stderr, "map load failed (see D lines in the trace)\n");
     if (resources) {
         const bt::ScriptStats st = bt::script_stats();
@@ -283,6 +309,54 @@ int main(int argc, char** argv) {
         fclose(g_trace);
         return 0;
     }
+    if (path_sweep) {
+        // slice 3D-6 (docs/NEXT_SLICE_BARROW.md 11 T3): the frame cost along a scripted camera path, every 20 ticks:
+        // title = the title's dusk orbit (one loop), credits = the credits' morning flyover (both ways). No one on the field
+        // (as the game shows them). V <t> out= xf= arena= drops= statics= models= est=
+        const bool title = !strcmp(path_sweep, "title");
+        for (int t = 0; t < 60; ++t) bt::game_tick();
+        if (!title) { const int m = bt::light_find("morning"); bt::field3d_set_light(m < 0 ? 0 : m); }
+        const int len = title ? 3600 : 7200;
+        for (int t = 0; t <= len; t += 20) {
+            float e[3], l[3], fov;
+            if (title) bt::title_orbit(t, e, l, &fov); else bt::credits_flyover(t, e, l, &fov);
+            bt::field3d_set_camera(e, l, fov);
+            for (int k = 0; k < 3; ++k) bt::field3d_tick();
+            host_frame_begin(t + 1, false);
+            bt::field3d_draw();
+            const r3d::Stats& st = r3d::stats();
+            printf("V %d out=%d xf=%d arena=%d drops=%d statics=%d models=%d est=%.2fM\n", t, st.verts_out, st.verts_xf, host_arena_used(), host_drops(),
+                   st.statics - st.statics_culled, st.models - st.models_culled, (1.520 * (40.0 * st.verts_xf + 24.0 * st.verts_out) + 134813) / 1e6);
+            host_frame_end();
+        }
+        fclose(g_trace);
+        return 0;
+    }
+    if (n_probe_views) {
+        // V <i> out=<submitted> xf= arena= drops= statics= models=: one frame through each camera, the map's entities at
+        // home (or --place'd), after 90 ticks (past the boot fade-in)
+        for (int t = 0; t < 90; ++t) bt::game_tick();
+        for (int k = 0; k < n_places; ++k) {
+            int a = 0;
+            if (strcmp(place_id[k], "rowan")) { a = 1 + bt::field_entity_find(place_id[k]); if (a <= 0) { fprintf(stderr, "--place: no %s\n", place_id[k]); return 2; } }
+            bt::field_script_place(a, place_xy[k][0], place_xy[k][1], bt::DIR_DOWN);
+        }
+        for (int t = 0; t < 30; ++t) bt::field3d_tick();
+        for (int k = 0; k < n_probe_views; ++k) {
+            const float* v = probe_views[k];
+            bt::field3d_set_camera(v, v + 3, v[6]);
+            for (int t = 0; t < 2; ++t) bt::field3d_tick();
+            const bool dump = g_dump_dir && std::find(dump_frames.begin(), dump_frames.end(), k + 1) != dump_frames.end();
+            host_frame_begin(k + 1, dump);
+            bt::game_draw();
+            const r3d::Stats& st = r3d::stats();
+            printf("V %d out=%d xf=%d arena=%d drops=%d statics=%d models=%d est=%.2fM\n", k, st.verts_out, st.verts_xf, host_arena_used(), host_drops(),
+                   st.statics - st.statics_culled, st.models - st.models_culled, (1.520 * (40.0 * st.verts_xf + 24.0 * st.verts_out) + 134813) / 1e6);
+            host_frame_end();
+        }
+        fclose(g_trace);
+        return 0;
+    }
     if (sweep) {
         // the hero's feet-box centre on each walkable tile's centre, facing south; field3d_reset puts the camera
         // where it settles (no lead), 30 view ticks let the fades finish; then one frame is drawn and measured
@@ -343,7 +417,7 @@ int main(int argc, char** argv) {
         if (!(bot_battles && in_battle)) ++fi;               // the field script waits while a battle runs
         g_buttons = (bot && (!bot_battles || in_battle)) ? bot_buttons() : f.b;
         g_axis[0] = f.ax; g_axis[1] = f.ay;
-        if (route && !in_battle) { int ax, ay; g_buttons = story_buttons(&ax, &ay); g_axis[0] = ax; g_axis[1] = ay; }
+        if (route && (!in_battle || bt::game_attract())) { int ax, ay; g_buttons = story_buttons(&ax, &ay); g_axis[0] = ax; g_axis[1] = ay; }
         if (n_way && bt::game_mode() == bt::GameMode::Field && way_i < n_way) {
             // steer the stick toward the next waypoint (feet-box centre, tiles)
             const bt::Hero& h = bt::field_state().hero;
@@ -386,7 +460,8 @@ int main(int argc, char** argv) {
             for (int k = 0; k < bi.n_enemies; ++k) fprintf(g_trace, "%s%.0f", k ? "," : "", bi.enemy_sx[k]);
             fprintf(g_trace, "\n");
         }
-        if (view && (md == bt::GameMode::Field || md == bt::GameMode::ToBattle || md == bt::GameMode::Dialog)) {
+        if (view && (md == bt::GameMode::Field || md == bt::GameMode::ToBattle || md == bt::GameMode::Dialog || md == bt::GameMode::Title ||
+                     md == bt::GameMode::MapChange || md == bt::GameMode::Credits || md == bt::GameMode::Results || md == bt::GameMode::Card)) {
             bt::Field3dInfo vi = bt::field3d_info();
             const r3d::Stats& st = r3d::stats();
             fprintf(g_trace, "V cam=%.3f,%.3f eye=%.2f,%.2f,%.2f yaw=%.3f walk=%.2f models=%d culled=%d statics=%d culled=%d near=%d strips_culled=%d tris=%d xf=%d out=%d arena=%d batches=%d drops=%d sprites=%d rects=%d mode=%s\n",
@@ -397,7 +472,7 @@ int main(int argc, char** argv) {
         if (story) story_trace(g_trace, n);
         if (bot && !bot_battles && bt::battle_outcome() != bt::BattleOutcome::None) break;
         static int linger = 0;
-        if (route && story_done() && md == bt::GameMode::Field && ++linger > 90) break;   // the route is over
+        if (route && story_done() && (md == bt::GameMode::Field || md == bt::GameMode::Title) && ++linger > 90) break;   // the route is over
     }
 #ifdef HOST_ALLOC_COUNT
     fprintf(g_trace, "D heap: %ld allocations inside game ticks and draws after the boot\n", g_alloc_count);
@@ -408,6 +483,7 @@ int main(int argc, char** argv) {
     }
     if (tlog) { turnlog_end(tlog); fclose(tlog); }
     if (rec) fclose(rec);
+    if (sprite_queues) host_queue_report(g_trace);   // the KOS sprite-queue mirror (host_engine.cpp)
     fclose(g_trace);
     return 0;
 }

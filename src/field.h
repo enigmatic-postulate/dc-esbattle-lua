@@ -34,7 +34,9 @@ enum Tile : uint8_t { TILE_GRASS, TILE_FLOWERS, TILE_PATH, TILE_WALL, TILE_TREE,
 enum class EntityKind : uint8_t { Enemy, Npc };
 // 3D look of a map entity (the `look` column): slime -> Skeleton Warrior, guard -> Skeleton Mage (the
 // Bone Warden), mage -> Wren (the human Mage), smith -> Brom (the Barbarian). Slice 3D-5 adds the last two.
-enum EntityLook : uint8_t { ELOOK_SLIME, ELOOK_GUARD, ELOOK_MAGE, ELOOK_SMITH, ELOOK_COUNT };
+// Slice 3D-6 adds watch -> Corwin (the Ranger), warden -> the Bone Warden in the field (the Skeleton Mage at 1.5x)
+// and stone -> the barrow's waystone (a static model: an interactable object, decision BA1).
+enum EntityLook : uint8_t { ELOOK_SLIME, ELOOK_GUARD, ELOOK_MAGE, ELOOK_SMITH, ELOOK_WATCH, ELOOK_WARDEN, ELOOK_STONE, ELOOK_COUNT };
 
 // Talk rules (slice 3D-5, docs/NEXT_SLICE_DIALOG.md 5.1; GDD 7.2), all integer:
 // range 1.3 tiles from the hero's feet-box centre to the NPC's tile centre, in 1/16 px:
@@ -83,7 +85,39 @@ struct Entity {
     char       cond[64];            // `if <cond...>`: the raw condition (compiled by script_load; "" = always)
     bool       hidden;              // `if` false: not drawn, not touchable, not blocking, frozen
     bool       facing_hero;         // an NPC holding its patrol to face the hero (within NPC_NOTICE_TILES)
+    // slice 3D-6
+    bool       sleeper;             // the map line says `asleep` (restored by field_reset / field_restore)
+    bool       asleep;              // `asleep` (an enemy): no patrol, no contact - blocks like an NPC; a script starts
+                                    // its battle (`battle <id>`); drawn lying (the awaken clip's first frame) until woken
+    int        mv_tx, mv_ty;        // a scripted move's target tile (mv_active)
+    bool       mv_active;
 };
+
+// Slice 3D-6 (docs/NEXT_SLICE_BARROW.md 5.2, 7.1): triggers, exits and camera shots of a map.
+const int MAX_TRIGGERS = 8, MAX_EXITS = 4, MAX_SHOTS = 12;
+struct Trigger {
+    char id[16];
+    int  x, y, w, h;                 // tile rectangle
+    char script[16];
+    bool once;
+    char cond[64];                   // "" = always (compiled by the script compiler)
+    bool inside;                     // the hero's feet box was inside last field tick (edge detection, re-arm)
+};
+struct Exit {
+    char id[16];
+    int  x, y, w, h;                 // tile rectangle; closed (cond false) = blocks like the map edge
+    char map[16];                    // the destination map (maps.txt)
+    int  tx, ty;                     // arrival tile on it
+    Dir  dir;                        // arrival facing; the hero walks one tile this way (T7 walk-in)
+    char cond[64];
+    bool open;                       // re-evaluated on every Progress change (field_set_exit_open)
+    bool inside;
+};
+struct Shot { char id[16]; float eye[3], look[3], fov; };
+// A glowing decal on the ground (the open exit, the boss ring: GDD App. B markers; the barrow's rune ring):
+// glow <x> <y> <radius> <rrggbb> [ring] [if <cond...>]. Shown while its `if` holds (field_set_glow).
+const int MAX_GLOWS = 6;
+struct Glow { float x, z, r; uint32_t rgb; bool ring; char cond[64]; bool on; };
 
 // A placed 3D model from a map `prop` line. The logic only uses the footprint (solid tiles);
 // the model name/position/rotation are for the 3D view.
@@ -109,6 +143,18 @@ struct FieldState {
     int     ticks;
     int     contact;      // entity index touched this tick (-1 = none); consumed by field_take_contact()
     int     talk_target;  // NPC the 'A Talk' prompt points at this tick (-1 = none); slice 3D-5
+    // slice 3D-6
+    FixedVec<Trigger, MAX_TRIGGERS> triggers;
+    FixedVec<Exit, MAX_EXITS> exits;
+    FixedVec<Shot, MAX_SHOTS> shots;
+    FixedVec<Glow, MAX_GLOWS> glows;
+    char    light[16];    // the map's light preset (romdisk/maps/lights.txt), "" = day
+    char    tree_model[16], fence_model[16];   // T tiles and # runs: `trees <model>`, `fences <model>` (default tree, fence)
+    uint8_t closed[MAX_MAP_W * MAX_MAP_H];   // 1 = a closed exit's tile (blocks like the map edge)
+    int     trigger_hit;  // trigger index entered this tick (-1 = none); consumed by field_take_trigger()
+    int     exit_hit;     // exit index entered this tick (-1 = none); consumed by field_take_exit()
+    bool    hero_mv;      // a scripted move of the hero is running
+    int     hero_mv_x, hero_mv_y, hero_mv_speed;   // its target (sprite cell top-left, 1/16 px) and speed (1/16 px per tick)
 };
 
 bool field_load(const char* path);          // parse a map file; false on error (reported via dbg_print)
@@ -135,6 +181,21 @@ EntityLook look_by_name(const char* name, bool* ok);
 // with a facing vector, and recompute the talk target as field_update would.
 void field_debug_place_hero(int x, int y, int face_x, int face_y);
 int  field_debug_talk_target();
+// ---- slice 3D-6 (triggers, exits, cutscene movement)
+int  field_take_trigger();                  // the trigger the hero's feet box entered this tick (edge), or -1
+int  field_take_exit();                     // the open exit the hero entered this tick (edge), or -1
+void field_set_exit_open(int e, bool open); // game.cpp: the exit's `if` (closed exits block)
+int  field_shot_find(const char* id);       // -1 if the map has no such shot
+int  field_entity_find(const char* id);     // -1 if absent
+// Cutscene movement (script `move`, `place`): the hero in sub-pixels along a straight line, entities tile by tile
+// (x first, then y); collisions are ignored. actor 0 = the hero, 1 + i = entity i. Deterministic (integers).
+void field_script_move(int actor, int tx, int ty, bool run);
+void field_script_move_rel(int actor, int dx, int dy, bool run);
+void field_script_place(int actor, int tx, int ty, Dir d);
+bool field_script_moving();                 // a scripted move is still running
+void field_script_tick();                   // advances the scripted moves (the game calls it in cutscene modes)
+void field_set_asleep(int entity_index, bool asleep);
+void field_set_glow(int glow, bool on);
 bool tile_walkable(uint8_t t);              // by tile type only
 bool cell_walkable(int x, int y);           // in bounds, walkable tile type, no solid prop
 const char* dir_name(Dir d);

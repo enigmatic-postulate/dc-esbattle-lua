@@ -1,0 +1,37 @@
+# ending.txt - the completion sequence (slice 3D-6; GDD 14 E2-E7, Appendix A `ending`). One script across two maps: it
+# starts on the barrow at dawn (after T10, the battle's hand-over) and goes on in the village. Every change to the GDD's
+# script is marked "# slice 3D-6" with its reason.
+@map barrow
+
+@script ending skip                                       # GDD App. A; Start skips it (to the credits)
+@if stage <= 5                                            # slice 3D-6: the lint's stage check (it is 5 here)
+  set stage 6                                             # GDD App. B: S6, the ending runs
+@end
+  objective ""
+  cam barrow_dawn 0
+  light lerp night dawn 240
+  letterbox on
+  wait 90                                                 # slice 3D-6: the dawn comes up before the line
+  warden: ...Thank you, knight. Let me sleep now.
+  fade out 40
+  map village 14 10 left light morning                    # slice 3D-6 (BA2): the gathering is by the wagon, not on the road
+  place wren 9 8 right                                    # slice 3D-6: they gather under the fade (a 25-tile walk otherwise)
+  place brom 11 8 down
+  place corwin 12 9 left
+  cam gathering 0
+  fade in 30
+  move rowan 10 10 | face wren rowan | face corwin rowan
+  face brom rowan
+  wren(happy): You did it! The barrow is quiet - I can feel it.
+  corwin: I'll admit it. I didn't think you'd come back.
+  brom(happy): Three cheers! Well, one cheer. I'm out of breath.
+  anim brom jump_short | anim wren jump_short | anim corwin jump_short | anim rowan jump_short   # slice 3D-6: `anim all cheer` (A5 stand-in)
+  wait 50
+  letterbox off
+  cam crane_up 180
+  set stage 7                                             # GDD App. B: S7, complete
+  card "THE END"
+  credits
+  results
+  transition T11
+  title

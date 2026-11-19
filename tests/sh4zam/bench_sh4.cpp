@@ -36,6 +36,7 @@ namespace eng {
 Sprite sprite_load(const char*, bool) { static int n = 0; return ++n; }
 void sprite_draw(Sprite, float, float, float, float, float, int) { g_bench_sink = 4; }
 void sprite_draw_uv(Sprite, float, float, float, float, float, float, float, float, float, int, uint32_t, float) { g_bench_sink = 4; }
+void sprite_reserve(Sprite, int, int) {}
 void gfx_rect(float, float, float, float, uint32_t, float) { g_bench_sink = 5; }
 void gfx_rect_tr(float, float, float, float, uint32_t, float) { g_bench_sink = 5; }
 bool input_down(Key k) { return (g_btn >> k) & 1u; }
@@ -48,12 +49,16 @@ Vert3* vtx_begin(int max) {
     g_open = g_used;
     return g_arena + g_used;
 }
+int vtx_room() { return g_open >= 0 ? 0 : ARENA_VERTS - g_used; }
 void vtx_end(Material, int used) {
     if (g_open < 0) return;
     if (used > 0) { g_used = g_open + used; g_drawn += (unsigned)used; }
     g_open = -1;
 }
 void set_clear_color(uint32_t) {}
+bool texture_update_vq(Sprite, const void*, int) { return true; }   // slice 3D-6 (the barrow's ground): a 130 KiB copy
+void set_fog(bool, uint32_t, float, float) {}                          // slice 3D-6: PVR registers
+void audio_event(const char*) {}
 float random01() { g_rng = g_rng * 1664525u + 1013904223u; return (float)(g_rng >> 8) / 16777216.0f; }
 void dbg_print(const char*) {}
 void boot_log(const char*) {}

@@ -5,6 +5,7 @@
 > the village map and the NPC places (AD1: Wren and Brom now stand at the GDD's (6,17) and (21,10) - VS1's map is
 > the GDD's), the village pictures, the two-shot's pitch/distance (§6), the model sizes (§5) and the budgets (§8).
 > The dialog system, scripts, quest, portraits and tests described below are unchanged and pass on the new art.
+> **Next slice:** [NEXT_SLICE_BARROW.md](NEXT_SLICE_BARROW.md).
 
 **Brief:** build, end to end and at production quality, the village half of the GDD
 (`docs/GDD_Horizontal_Slice.pdf`): dialog, quest sequencing, talking portraits, the item inventory (potions) and

@@ -1,0 +1,23 @@
+# Skip the boss intro and the ending (T6): Start on the Warden's intro (never the first time's choices: there are none)
+# and on the ending; the credits are skipped with Start too. Ends in the same state as full.route.
+expect mode=title
+newgame
+until field
+choose 0
+talk wren
+chase slime_a
+chase slime_b
+talk wren
+talk brom
+talk corwin
+exit east
+talk waystone
+goto 16 7
+skip
+until to_battle
+until dialog
+skip
+until credits
+skip
+until title
+expect mode=title cleared=1 stage=7 warden_down=1

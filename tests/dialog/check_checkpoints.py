@@ -39,8 +39,10 @@ for idx, ln in enumerate(lines):
     elif ln.startswith('X mode=field') and pending_check:
         tick, raw = pending_check
         b = bytes.fromhex(raw)
-        defeated = b[8] | b[9] << 8
-        cp_x, cp_y = b[10], b[11]
+        # src/progress.h (slice 3D-6): defeated[4] at 8, trig[4] at 16, map at 24, cp_x / cp_y at 25 / 26
+        mp = b[24]
+        defeated = b[8 + 2 * mp] | b[9 + 2 * mp] << 8
+        cp_x, cp_y = b[25], b[26]
         max_hp = b[2]
         m = re.search(r'hero=(-?\d+),(-?\d+),', ln)
         hx, hy = int(m.group(1)), int(m.group(2))

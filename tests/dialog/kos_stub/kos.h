@@ -36,6 +36,10 @@ typedef int file_t;
 #define PVR_CULLING_CCW 2
 #define PVR_BLEND_SRCALPHA 4
 #define PVR_BLEND_ONE 1
+#define PVR_BLEND_ZERO 0
+#define PVR_BLEND_DESTCOLOR 2
+#define PVR_FOG_TABLE 0
+#define PVR_FOG_DISABLE 2
 #define PVR_TXRLOAD_16BPP 2
 #define KOS_IMG_FMT_RGB565 1
 #define KOS_IMG_FMT_ARGB4444 2
@@ -60,6 +64,7 @@ void pvr_txr_load_kimg(const kos_img_t*, pvr_ptr_t, uint32_t);
 void pvr_txr_load(const void* src, pvr_ptr_t dst, uint32_t count);
 pvr_ptr_t pvr_mem_malloc(size_t); size_t pvr_mem_available(void);
 void pvr_set_bg_color(float, float, float);
+void pvr_fog_table_color(float a, float r, float g, float b); void pvr_fog_table_linear(float start, float end);
 int pvr_wait_ready(void); int pvr_scene_begin(void); int pvr_list_begin(pvr_list_t); int pvr_list_finish(void); int pvr_scene_finish(void);
 int pvr_get_stats(pvr_stats_t*);
 maple_device_t* maple_enum_type(int, uint32_t); void* maple_dev_status(maple_device_t*);

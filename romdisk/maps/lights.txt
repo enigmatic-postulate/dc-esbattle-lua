@@ -1,0 +1,12 @@
+# lights.txt - light presets (slice 3D-6, docs/NEXT_SLICE_BARROW.md 5.6, 7.4; src/lights.h has the format).
+# dir: towards the light; ambient + diffuse * (n . dir) lights the characters and the kit's props, multiplied by
+# `colour`; `tint` multiplies what is baked (the VS1 village, the painted ground, markers); `clear` is the
+# background (`ground`: the outer ground x tint); fog: PVR table fog (colour, linear start..end in view depth).
+# `day` is built in (the look of every earlier slice); the others are tuned with tools/render_frame.py renders.
+light dusk    dir -0.80 0.40 0.30  ambient 0.36 diffuse 0.62  colour FFB27A  tint D89A72  clear 3A2A3A
+# night: brightness knobs, most effect first - tint (baked ground/props), ambient/diffuse + colour (characters, lit
+# props), clear + fog colour (sky and far mist; keep the two equal), fog start/end (push out = less haze).
+# Was: ambient 0.35 diffuse 0.55 colour 8C99F2 tint 6C7CB8 clear 0B1022 fog 0B1022 9 26 (too dark on hardware).
+light night   dir -0.30 0.80 -0.35 ambient 0.48 diffuse 0.62  colour A8B4FF  tint 94A2D8  clear 1E2640  fog 1E2640 11 30
+light dawn    dir 0.70 0.45 0.35   ambient 0.46 diffuse 0.58  colour FFC8A8  tint E8B8A8  clear 5A4858  fog 8A6A78 18 44
+light morning dir 0.45 0.80 0.40   ambient 0.56 diffuse 0.50  colour FFF6E6  tint FFF4E4  clear ground

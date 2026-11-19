@@ -1,21 +1,17 @@
-# Checkpoints: a loss at S3 restores C2 (the report); after Brom's rest a loss restores that checkpoint.
+# Checkpoints: a loss at S3 restores C2 (the report); after Brom's rest a loss restores that checkpoint (slice 3D-6: the
+# village has no foe left at S3 - the Warden is the barrow's - so the losses are the barrow's: tests/barrow/routes/cp_c3.route;
+# here the rest checkpoint is taken at S1 and a loss to the squad restores it).
 choose 0
 talk wren
-chase slime_a
-chase slime_b
-talk wren
-expect stage=3 cp=2 max_hp=30
+expect stage=1 cp=1
 talk brom
 expect potions=3 talked_brom=1
-policy guard
-chase warden
-expect retries=1 stage=3 cp=2 potions=0 talked_brom=0 max_hp=30 hp=30 at_cp=1 visible:warden=1 patrol_a=1 patrol_b=1 visible:slime_a=0
-talk brom
 choose 0
 talk brom
-expect cp=9 potions=3 brom_refill=1
-chase warden
-expect retries=2 stage=3 cp=9 potions=3 talked_brom=1 brom_refill=1 hp=30 at_cp=1
-policy boss:good:1
-chase warden
-expect stage=6 warden_down=1
+expect cp=9 potions=3 hp=20
+policy guard
+chase slime_b
+expect retries=1 stage=1 cp=9 potions=3 talked_brom=1 hp=20 at_cp=1 visible:slime_b=1
+policy smart
+chase slime_b
+expect patrol_b=1

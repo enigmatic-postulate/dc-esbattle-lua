@@ -1,0 +1,6 @@
+# The attract demo (GDD 5; docs/NEXT_SLICE_BARROW.md 11 T11): 40 s (2,400 ticks) without input on the title starts it; it
+# plays the recorded first minutes and returns to the title by itself.
+expect mode=title
+until attract
+until title
+expect mode=title cleared=0

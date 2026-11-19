@@ -129,8 +129,9 @@ def parse(trace):
             for kv in p[2:]:
                 k, v = kv.split('=', 1)
                 d[k] = v
+            d.setdefault('npc', '-2')
             for k in ('open', 'closing', 't', 'bars', 'cam', 'box', 'pc', 'page', 'pause', 'complete', 'marker', 'choice', 'sel',
-                      'opts', 'cancel', 'spk', 'var', 'slot', 'slide', 'port', 'fade', 'prompt', 'hud', 'sy', 'uploads'):
+                      'opts', 'cancel', 'spk', 'var', 'slot', 'slide', 'port', 'fade', 'prompt', 'hud', 'sy', 'uploads', 'npc'):
                 d[k] = int(d[k])
             d['btn'] = int(d['btn'], 16)
             s, tot = d['shown'].split('/')
@@ -188,7 +189,9 @@ def main():
             err('consume', t, 'the dialog did not start at T3 tick 0')
         # a dialog started by a talk (not after a battle) needs a fresh A press that tick
         prev_modes = [m for tt, m in N if tt < t]
-        if prev_modes and prev_modes[-1] == 'field' and not edge(t, A):
+        # slice 3D-6: a script the game starts by itself (a trigger's: the road block, the boss ring) has no NPC (npc=-1)
+        by_game = t in G and G[t]['npc'] == -1
+        if prev_modes and prev_modes[-1] == 'field' and not edge(t, A) and not by_game:
             # the after_battle script opens from to_field -> field -> dialog in one tick: not a press
             if not any(tt == t for tt, m in N if m == 'field'):
                 err('consume', t, 'a dialog opened without a fresh A press')
@@ -326,8 +329,8 @@ def main():
                         reach = reachable_blocking(ops, tgt)
                         if g['open'] and g['pc'] not in reach:
                             err('choice', t, 'picked option %d but the script went to %d (reachable: %s)' % (picked, g['pc'], sorted(reach)))
-            # fades and waits: no box
-            if g['op'] in ('fade', 'wait'):
+            # fades and waits: no box (slice 3D-6: nor while a cutscene command - a move, a camera ease - runs)
+            if g['op'] in ('fade', 'wait', 'host'):
                 count['fade'] += 1
                 if g['box']:
                     err('fade', t, 'the box shows during a %s' % g['op'])

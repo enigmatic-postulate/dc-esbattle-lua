@@ -1,0 +1,6 @@
+# maps.txt - the game's maps (slice 3D-6, docs/NEXT_SLICE_BARROW.md 5.3, 5.4). The line order is the map id
+# (Progress.map; per-map defeated and trigger bits). Every map's scripts/<map>.txt is compiled at boot; `scripts`
+# adds a file of scripts that belong to no single map (its `@map` says where they start).
+map village
+map barrow
+scripts ending

@@ -120,6 +120,10 @@ The ground is still one texture over one grid: draw cost, vertex counts and the 
 
 ## 7. Open
 
+(The next slice, [NEXT_SLICE_BARROW.md](NEXT_SLICE_BARROW.md), paints the Barrow's ground with this tool and reuses the
+VQ texture slot across maps.)
+
+
 * The battle arena's grass and dirt are still their own (`ground.png`, `dirt.png`). The painter could make the
   arena's ground from the same palette and noise, so the battle clearing matches the village road.
 * Characters cast blob shadows; only the props' shadows are painted (they never move).

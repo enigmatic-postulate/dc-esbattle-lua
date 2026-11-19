@@ -4,6 +4,8 @@
 > read as washed out; the village now has a painted ground (12 texels per tile, the kit's palette, prop shadows,
 > VQ-compressed, 66 KiB). VS1's generator still serves maps without a painted ground. Frame costs are unchanged;
 > VRAM 916 KiB, romdisk 2.45 MB.
+>
+> **Next slice:** [NEXT_SLICE_BARROW.md](NEXT_SLICE_BARROW.md) (Corwin, the Barrow, the death screen, the ending, the title).
 
 **Brief:** a different implementation of the village was uploaded (`larp2_3d_vs1.zip`, called **VS1** here). Reconcile
 what we have - the slice 3D-5 game: dialog, portraits, quest, inventory, the 3D battle - but with VS1's art for the

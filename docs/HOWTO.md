@@ -400,3 +400,95 @@ the format (GDD 8). The lint checks that every speaker has all three.
   or props run `python3 tools/ground/paint_ground.py` (it writes `romdisk/maps/<map>.gnd`; palette and layers are at the
   top of the script). A map without a `.gnd` gets the generated VS1 ground (`build_ground_texture()` in
   `src/field3d.cpp`; `tests/vs1art/check_ground.py` holds its reference - change both).
+
+## 14. Maps, cutscenes, light and the frame around the game (slice 3D-6)
+
+Full reference: [SLICE_BARROW.md](SLICE_BARROW.md) and the plan [NEXT_SLICE_BARROW.md](NEXT_SLICE_BARROW.md) §5, §7.
+After any change run `python3 tools/dialog/lint.py` and `tests/barrow/run.sh`.
+
+### 14.1 Add a map
+
+1. `romdisk/maps/<name>.txt` in the format of §1, then list it in `romdisk/maps/maps.txt` (`map <name>`; the line
+   order is the map id in Progress - append, never reorder, or saved ids change meaning). At most 4 maps.
+2. Its scripts: `romdisk/scripts/<name>.txt` (compiled at boot with every other file; its scripts run on that map).
+3. Its ground: `python3 tools/ground/paint_ground.py romdisk/maps/<name>.txt` (add a palette to `PALETTES` at the top of
+   the script, keyed by the map's `name`). Every painted ground must be 512x512 (the maps share one VQ texture slot).
+   Without a `.gnd` the map gets the generated VS1 ground (its own slot: 64 KiB of VRAM).
+4. Its light: `light <preset>`; optionally `trees <model>` and `fences <model>` for its `T` tiles and `#` runs.
+5. A way in: an `exit` on another map, or a script's `map <name> <x> <y> <dir> [light <preset>]`.
+
+### 14.2 Triggers, exits, shots, glows
+
+```
+trigger <id> <x> <y> <w> <h> <script> [once] [if <cond>]      # the hero's feet entering the rectangle runs the script
+exit    <id> <x> <y> <w> <h> <map> <tx> <ty> <dir> [if <cond>] # T7 to <map>, arriving on (tx, ty) facing dir + a 1-tile walk-in
+shot    <id> <eye x y z> <look x y z> <fov>                    # a camera for `cam`
+glow    <x> <y> <radius> <rrggbb> [ring] [if <cond>]           # a glowing decal (exit glow, boss ring)
+entity  <id> enemy <look> <x> <y> <dir> <encounter> asleep ... # no patrol, no contact: a script starts its battle
+```
+
+* A trigger fires on entering (an edge) and re-arms when the hero has left; `once` remembers it in Progress (per map).
+  Its script runs as a cutscene (no NPC: no two-shot); to push the hero out, `move rowan -1 0`.
+* A closed exit (its `if` false) blocks like the map's edge. Arrival tiles may lie inside another exit or trigger: both
+  only fire on entering.
+* Conditions are compiled by the script compiler (the lint checks them and that every flag they read is set).
+
+### 14.3 Write a cutscene
+
+```
+@map barrow                       # in a file that is not a map's own: where its scripts start
+@script my_scene skip             # `skip`: Start fast-forwards it (never through a choice)
+  letterbox on
+  cam crypt 0                     # a shot of the map: 0 = a cut; `cam <shot> 90` eases over 90 ticks (blocks); `cam field`
+  move rowan 12 10 | face wren rowan     # parallel: move, anim, face, emote, cam, wait (at most 4); the line ends when all have
+  move rowan -1 0                 # signed numbers: relative (walks one tile back); `run` at the end walks faster
+  place wren 9 9 right            # instant (under a fade)
+  namecard "THE BONE WARDEN"      # 120 ticks; `card "THE END"` 150 ticks with the logo
+  battle warden boss              # T5 into the battle with that map entity; a win goes on here (boss: VICTORY without A, T10);
+                                  # a loss shows the death screen (the retry restores the last checkpoint)
+  map village 16 10 left light morning   # T7; the following lines run on that map (its actors, its shots)
+  light lerp night dawn 240       # or `light <preset>` (at once: best under a fade)
+  transition T11                  # any catalogue transition; credits / results / title: the ending's screens
+  end
+```
+
+* Actors are the map's entities (and `rowan`); the compiler rejects an actor, a shot or a battle of another map.
+* A script the game starts by itself (a trigger, the intro) has no NPC: pages show without the two-shot.
+* The game's special scripts: `new_game` (the harness's start), `intro` (after NEW GAME), `after_battle` (after a
+  contact battle's win), `warden_retry` (the retry after losing to the boss).
+
+### 14.4 Add or change a light preset
+
+`romdisk/maps/lights.txt`: `light <name> dir x y z ambient a diffuse d colour rrggbb tint rrggbb clear rrggbb|ground
+[fog rrggbb start end]` (at most 8; `day` is built in and may be redefined). `colour` multiplies the characters and the
+runtime-lit props, `tint` the baked (PRELIT) props, the ground and nothing else; check the look with
+`tools/render_frame.py` on a `--dump` frame (it emulates the fog). A preset change re-bakes every character (~70 ms):
+use `light` under a fade, `light lerp` in the open.
+
+### 14.5 The title, the credits, the results, the demo
+
+* The logo: `python3 tools/make_logo.py` (a real 256x64 ARGB4444 logo can replace `romdisk/tex/logo.tex`).
+* The title's orbit and the credits' flyover: `title_orbit()` / `credits_flyover()` in `src/screens.cpp`; after a change,
+  `battle_trace_f32 - /dev/null --path title` (or `credits`) prints every frame's cost (`tests/barrow/run.sh` checks it).
+* The credits: `romdisk/scripts/credits.txt` (`# heading`, a line, a blank line = a gap, `;` a comment).
+* The rank: `results_rank()` in `src/screens.cpp` (decision D8).
+* The attract demo: edit `tests/barrow/routes/attract.route`, then `tools/make_attract.sh` (needs `make host`); the
+  demo must replay its recording tick for tick (`tests/barrow/run.sh` checks it) - anything that changes the game's
+  logic before the demo's end (the village, its scripts, the battle rules) needs a re-recording.
+
+### 14.6 Test a route from the title
+
+`battle_trace_f32 - out.trace --state-only --boot --route my.route` starts as the Dreamcast does (the title). Route steps
+for the frame: `newgame`, `title_credits`, `skip`, `death retry|title`, `until <mode>`, `exit <id>`; expectations
+`map=`, `cleared=`, `walkable:x,y=`, `transition=`. The trace's `T` lines give each transition's start and end tick,
+`R` the results card, `A` the audio hooks; `tests/barrow/check_flow.py` and `check_results.py` check them.
+
+## 15. The UI font and icons (the UI art pass, docs/UI_ART.md)
+
+Everything the 3D game writes outside the dialog boxes (HUD, battle numbers and labels, prompts, banners, screen
+titles) uses the UI atlas `romdisk/ui/ui.uia`: `ui_text(UF_S|UF_L, x, y, text, argb, z, scale, align)` with `y` = the
+top of the capitals (S: 14 px, L: 28 px), `ui_text_px(x, y, text, cap_px, ...)` to ask for a size, `ui_icon(UI_...,
+cx, cy, size, argb, z)`. Do not use `font_draw` / `icon_draw` (the 2D battle view's; `tests/ui/run.sh` fails).
+To change a font size or add an icon: `tools/ui/make_ui_atlas.py` (`FONTS`, `L_CHARS`, `ICONS` + `enum UiIcon` in the
+same order, `icon_art()`), rebuild, run `tests/ui/run.sh`. A texture drawn with many sprites per frame reserves its
+KOS queues at boot (`eng::sprite_reserve`); `--sprite-queues` on the host shows each texture's peak.

@@ -22,6 +22,7 @@
 #include "render3d.h"
 #include <stddef.h>
 #include <string.h>
+#include <algorithm>
 
 namespace r3d {
 
@@ -32,7 +33,8 @@ static bool g_strip_culling = true;
 void set_strip_culling(bool on) { g_strip_culling = on; }
 static bool g_near_strips = true;
 void set_near_strips(bool on) { g_near_strips = on; }
-void stats_reset() { memset(&g_stats, 0, sizeof g_stats); }
+static bool g_hull_chars = false, g_hull_props = false;     // cel prototype: outline the draws that follow
+void stats_reset() { memset(&g_stats, 0, sizeof g_stats); g_hull_chars = g_hull_props = false; }
 const Stats& stats() { return g_stats; }
 void stats_add(int verts_out, int tris) { g_stats.verts_out += verts_out; g_stats.tris += tris; }
 
@@ -99,6 +101,120 @@ static inline void put_vert(eng::Vert3* o, float x, float y, float z, uint32_t u
     d[4] = u; d[5] = v; d[6] = argb; d[7] = 0;
 }
 static inline uint32_t fbits(const float& f) { return *reinterpret_cast<const u32a*>(&f); }
+
+// ---------------------------------------------------------------------------- cel prototype
+// docs/CEL_SHADING_STUDY.md. Defaults: off. The hardware test builds (makefile): CEL=1 = toon lighting + 2 px outlines
+// from the decimated hull meshes on every character; CEL=2 = the same on the hero only. No props, no weapons.
+#ifndef CEL_DEFAULT
+#define CEL_DEFAULT 0
+#endif
+static CelParams g_cel = { CEL_DEFAULT ? 2.0f : 0.0f, CEL_DEFAULT == 2 ? 2.0f : 1.0f, 0.0f, CEL_DEFAULT ? 1.0f : 0.0f,
+                           0.12f, 0.55f, (float)0x140C10, 1.0f, 0.05f, 0.0f };
+CelParams& cel() { return g_cel; }
+void cel_hull_next(bool characters, bool props) { g_hull_chars = characters; g_hull_props = props; }
+float cel_ndl(float ndl) {
+    if (g_cel.toon < 0.5f) return ndl;
+    return ndl < g_cel.band_lo ? 0.0f : (ndl < g_cel.band_hi ? 0.5f : 1.0f);
+}
+static eng::Material g_hull_mat = 0;
+static eng::Material hull_material() {
+    if (!g_hull_mat) g_hull_mat = eng::material_create(0, eng::MAT_CULL_FRONT);   // once, the first time it is needed
+    return g_hull_mat;
+}
+static uint32_t hull_colour() { return 0xFF000000u | ((uint32_t)g_cel.outline_rgb & 0xFFFFFFu); }
+
+// Welded normals into the vertices' pad bytes (load time; the model image is our own static arena memory).
+static void weld_normals(const dmf::Model& m) {
+    const int nv = m.h->num_verts;
+    static int idx[4096];
+    static int32_t key[4096][3];
+    if (nv > 4096) return;
+    dmf::Vertex* vs = const_cast<dmf::Vertex*>(m.verts);
+    for (int i = 0; i < nv; ++i) {
+        idx[i] = i;
+        key[i][0] = (int32_t)(vs[i].x * 2048.0f + (vs[i].x < 0 ? -0.5f : 0.5f));
+        key[i][1] = (int32_t)(vs[i].y * 2048.0f + (vs[i].y < 0 ? -0.5f : 0.5f));
+        key[i][2] = (int32_t)(vs[i].z * 2048.0f + (vs[i].z < 0 ? -0.5f : 0.5f));
+    }
+    std::sort(idx, idx + nv, [](int a, int b) {
+        if (key[a][0] != key[b][0]) return key[a][0] < key[b][0];
+        if (key[a][1] != key[b][1]) return key[a][1] < key[b][1];
+        return key[a][2] < key[b][2];
+    });
+    for (int s0 = 0; s0 < nv;) {
+        int s1 = s0 + 1;
+        while (s1 < nv && key[idx[s1]][0] == key[idx[s0]][0] && key[idx[s1]][1] == key[idx[s0]][1] && key[idx[s1]][2] == key[idx[s0]][2]) ++s1;
+        float n[3] = { 0, 0, 0 };
+        for (int k = s0; k < s1; ++k) { n[0] += vs[idx[k]].nx; n[1] += vs[idx[k]].ny; n[2] += vs[idx[k]].nz; }
+        const float l2 = n[0] * n[0] + n[1] * n[1] + n[2] * n[2];
+        const float inv = l2 > 1e-6f ? 127.0f / sqrtf(l2) : 0.0f;
+        for (int k = s0; k < s1; ++k) {
+            uint8_t* p = vs[idx[k]].pad;
+            p[0] = (uint8_t)(int8_t)(n[0] * inv); p[1] = (uint8_t)(int8_t)(n[1] * inv); p[2] = (uint8_t)(int8_t)(n[2] * inv); p[3] = 0;
+        }
+        s0 = s1;
+    }
+}
+
+// The hull's strips: every opaque batch of the model, from g_xv (already holding the pushed-out vertices), into
+// one arena batch with the hull material; strips wholly off screen are skipped. Same copy loop as emit_batches.
+static bool emit_hull_strips(const dmf::Model& m) {
+    int total = 0;
+    for (int k = 0; k < m.h->num_batches; ++k)
+        if (!(m.batches[k].flags & dmf::BATCH_TRANSLUCENT)) total += (int)(m.batches[k].num_words - m.batches[k].num_strips);
+    const eng::Material mat = hull_material();
+    if (!total || !mat) return false;
+    eng::Vert3* out = eng::vtx_begin(total);
+    if (!out) return false;
+    eng::Vert3* o = out;
+    int tris = 0;
+    for (int k = 0; k < m.h->num_batches; ++k) {
+        const dmf::Batch& bt = m.batches[k];
+        if (bt.flags & dmf::BATCH_TRANSLUCENT) continue;
+        const uint16_t* w = m.strips + bt.first_word;
+        const uint16_t* end = w + bt.num_words;
+        while (w < end) {
+            const int len = *w++;
+            SHZ_PREFETCH(w + 16);
+            int l = 0, r = 0, t = 0, b = 0;
+            for (int j = 0; j < len; ++j) {
+                const eng::Vert3& x = g_xv[w[j]];
+                l += x.x < 0.0f; r += x.x > 640.0f; t += x.y < 0.0f; b += x.y > 480.0f;
+            }
+            if (l == len || r == len || t == len || b == len) { w += len; continue; }
+            tris += len - 2;
+            const eng::Vert3* a = &g_xv[w[0]];
+            const eng::Vert3* bb = &g_xv[w[1]];
+            SHZ_PREFETCH(bb);
+            for (int j = 0; j < len; ++j) {
+                const eng::Vert3* c = &g_xv[w[j + 2]];
+                SHZ_PREFETCH(c);
+                const u32a* sv32 = reinterpret_cast<const u32a*>(a);
+                u32a* d = reinterpret_cast<u32a*>(o);
+                shz_dcache_alloc_line(o);
+                d[0] = eng::VERT; d[1] = sv32[1]; d[2] = sv32[2]; d[3] = sv32[3];
+                d[4] = sv32[4]; d[5] = sv32[5]; d[6] = sv32[6]; d[7] = 0;
+                ++o;
+                a = bb; bb = c;
+            }
+            o[-1].flags = eng::VERT_EOL;
+            w += len;
+        }
+    }
+    const int used = (int)(o - out);
+    eng::vtx_end(mat, used);
+    g_stats.tris += tris;
+    g_stats.verts_out += used;
+    g_stats.hull_out += used;
+    ++g_stats.hull_models;
+    return true;
+}
+
+// Offset (model units per int8 normal step) that puts the hull `outline_px` pixels out at depth W, for a world scale.
+static float hull_offset(const Camera& cam, float W, float world_scale) {
+    return g_cel.outline_px * W / (cam.focal * (world_scale > 1e-6f ? world_scale : 1.0f)) * (1.0f / 127.0f);
+}
+
 
 // Perspective divide for W >= near_w > 0: FSRRA (1/|W|) instead of a 10+ cycle FDIV.
 static inline float inv_w(float W) { return shz_invf_fsrra(W); }
@@ -176,6 +292,7 @@ bool gfx_init(ModelGfx* g, const dmf::Model& m, bool cull) {
     if (!m.h) return false;
     g->m = &m;
     if (!m.h->num_bones) g->strip_spheres = compute_strip_spheres(m);
+    if (g_cel.outline_px > 0.0f && m.h->num_verts <= 4096) { weld_normals(m); g->hull_ok = true; }   // cel prototype
     for (int k = 0; k < m.num_mats; ++k) {
         int f = 0;
         if (m.mat_flags[k] & dmf::MAT_BILINEAR) f |= eng::MAT_BILINEAR;
@@ -309,11 +426,13 @@ bool draw_model_in(const Camera& cam, const Light& light, const ModelGfx& g, con
         for (int i = 0; i < 256; ++i) lut[i] = shade(m.uniform_argb, (float)i * (1.0f / 255.0f), tn);
     const float amb = light.ambient, dif = light.diffuse;
     const float near_w = cam.near_w;
+    const bool toon = g_cel.toon >= 0.5f;
 
     // Finishes one vertex: perspective divide (screen mapping is in the matrix), lighting.
     auto finish = [&](eng::Vert3* o, const dmf::Vertex* v, float X, float Y, float W, float ndl) {
         if (W < near_w) W = near_w;                  // cannot happen after the sphere test; belt and braces
         const float inv = inv_w(W);
+        if (toon) ndl = cel_ndl(ndl);                // cel prototype: banded lighting
         float lit = amb + (ndl > 0.0f ? dif * ndl : 0.0f);
         // Ordered compare only (NaN -> 1.0): on the SH4 a negated `<=` needs an unordered test,
         // which GCC's default -mieee code does with a soft-float __unordsf2 call.
@@ -399,7 +518,62 @@ bool draw_model_in(const Camera& cam, const Light& light, const ModelGfx& g, con
     }
     g_stats.verts_xf += nv;
 
-    return emit_batches(g);
+    if (!emit_batches(g)) return false;
+    // cel prototype: the outline hull - the same skinning with every vertex pushed out along its welded normal
+    const bool lod = g_cel.lod >= 0.5f && g.hull && g.hull->m && g.hull->hull_ok;
+    if (g_hull_chars && (g.hull_ok || lod) && g_cel.outline_px > 0.0f) {
+        const dmf::Model& hm = lod ? *g.hull->m : m;        // the decimated hull mesh, or the model itself
+        const float W = -mat_point(cam.view, bound_centre).z;
+        const float k = hull_offset(cam, W, max_scale(world));
+        const float zp = g_cel.zpush;
+        const uint32_t col = hull_colour();
+        for (int gi = 0; gi < hm.h->num_groups; ++gi) {
+            const dmf::Group& gr = hm.groups[gi];
+            const int b0 = nb ? gr.bone0 : 0;
+            const bool two = nb && gr.bone1 != dmf::NO_BONE;
+            const int count = gr.count;
+            const dmf::Vertex* v = hm.verts + gr.first;
+            eng::Vert3* o = g_xv + gr.first;
+            xmtrx_load(xf[b0]);
+            if (!two) {
+                for (int i = 0; i < count; ++i, ++v, ++o) {
+                    SHZ_PREFETCH(v + 2);
+                    const Vec3 s = xmtrx_point(v->x + (float)(int8_t)v->pad[0] * k, v->y + (float)(int8_t)v->pad[1] * k,
+                                               v->z + (float)(int8_t)v->pad[2] * k);
+                    const float Wv = s.z < near_w ? near_w : s.z;
+                    const float inv = inv_w(Wv);
+                    put_vert(o, s.x * inv, s.y * inv, zp > 0.0f ? inv_w(Wv + zp) : inv, 0u, 0u, col);
+                }
+                continue;
+            }
+            XT* t = g_xt + gr.first;
+            for (int i = 0; i < count; ++i, ++v, ++t) {
+                SHZ_PREFETCH(v + 2);
+                const Vec3 s = xmtrx_point(v->x + (float)(int8_t)v->pad[0] * k, v->y + (float)(int8_t)v->pad[1] * k,
+                                           v->z + (float)(int8_t)v->pad[2] * k);
+                xt_claim(t);
+                t->X = s.x; t->Y = s.y; t->W = s.z;
+            }
+            xmtrx_load(xf[gr.bone1]);
+            v = hm.verts + gr.first;
+            t = g_xt + gr.first;
+            for (int i = 0; i < count; ++i, ++v, ++t, ++o) {
+                SHZ_PREFETCH(v + 2);
+                SHZ_PREFETCH(t + 4);
+                const Vec3 s = xmtrx_point(v->x + (float)(int8_t)v->pad[0] * k, v->y + (float)(int8_t)v->pad[1] * k,
+                                           v->z + (float)(int8_t)v->pad[2] * k);
+                const float w0 = (float)v->w0 * (1.0f / 255.0f);
+                float W2 = s.z + (t->W - s.z) * w0;
+                if (W2 < near_w) W2 = near_w;
+                const float inv = inv_w(W2);
+                put_vert(o, (s.x + (t->X - s.x) * w0) * inv, (s.y + (t->Y - s.y) * w0) * inv, zp > 0.0f ? inv_w(W2 + zp) : inv, 0u, 0u, col);
+            }
+        }
+        g_stats.verts_xf += hm.h->num_verts;
+        g_stats.hull_xf += hm.h->num_verts;
+        emit_hull_strips(hm);
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------- polygons
@@ -474,7 +648,7 @@ void prelight(const dmf::Model& m, const Mat34& world, const Light& light, uint3
     static const float white[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
     for (int i = 0; i < m.h->num_verts; ++i) {
         const dmf::Vertex& v = m.verts[i];
-        const float ndl = shz_dot6f((float)v.nx, (float)v.ny, (float)v.nz, l.x, l.y, l.z);
+        const float ndl = cel_ndl(shz_dot6f((float)v.nx, (float)v.ny, (float)v.nz, l.x, l.y, l.z));
         float lit = light.ambient + (ndl > 0.0f ? light.diffuse * ndl : 0.0f);
         lit = lit < 1.0f ? lit : 1.0f;
         colors[i] = shade(v.argb, lit, white);
@@ -527,7 +701,7 @@ void prelight_posed_range(const dmf::Model& m, const Mat34* skin, float yaw, con
             const Vec3 n = v3((float)v.nx, (float)v.ny, (float)v.nz);
             const float w0 = two ? (float)v.w0 * (1.0f / 255.0f) : 1.0f;
             const Vec3 nw = normalize(lerp(mat_dir(b, n), mat_dir(a, n), w0));
-            const float ndl = dot(nw, light.dir);
+            const float ndl = cel_ndl(dot(nw, light.dir));
             float lit = light.ambient + (ndl > 0.0f ? light.diffuse * ndl : 0.0f);
             lit = lit < 1.0f ? lit : 1.0f;
             colors[i] = shade(v.argb, lit, white);
@@ -624,6 +798,26 @@ bool draw_static(const Camera& cam, const ModelGfx& g, const Mat34& world, const
             g_stats.tris += tris;
             g_stats.verts_out += used;
         }
+        // cel prototype: the outline hull of a static prop (small props only unless cel().props >= 2)
+        if (g_hull_props && g.hull_ok && g_cel.outline_px > 0.0f && (g_cel.props >= 1.5f || nv < CEL_PROP_MAX_VERTS)) {
+            const float W = -mat_point(cam.view, mat_point(world, m.centre)).z;
+            const float k = hull_offset(cam, W, ws);
+            const uint32_t col = hull_colour();
+            xmtrx_load(cam.screen);
+            xmtrx_apply(world);
+            const dmf::Vertex* v = m.verts;
+            eng::Vert3* ho = g_xv;
+            for (int i = 0; i < nv; ++i, ++v, ++ho) {
+                SHZ_PREFETCH(v + 2);
+                const Vec3 s = xmtrx_point(v->x + (float)(int8_t)v->pad[0] * k, v->y + (float)(int8_t)v->pad[1] * k,
+                                           v->z + (float)(int8_t)v->pad[2] * k);
+                const float inv = inv_w(s.z < near_w ? near_w : s.z);
+                put_vert(ho, s.x * inv, s.y * inv, inv, 0u, 0u, col);
+            }
+            g_stats.verts_xf += nv;
+            g_stats.hull_xf += nv;
+            emit_hull_strips(m);
+        }
         return true;
     }
     // Crosses the near plane (rare: a prop right under the camera). Every vertex is transformed
@@ -688,15 +882,23 @@ bool draw_static(const Camera& cam, const ModelGfx& g, const Mat34& world, const
     const float sw = 2.0f * cam.cx, sh = 2.0f * cam.cy;
     for (int k = 0; k < m.h->num_batches; ++k) {
         const dmf::Batch& bt = m.batches[k];
-        eng::Vert3* out = eng::vtx_begin((int)bt.num_tris * 5 + 2 * (int)bt.num_strips);   // bound: 5 per clipped triangle
+        // bound: 5 per clipped triangle - far more than is ever written (a house under the camera writes a few hundred
+        // of its ~15,000). Slice 3D-6: reserve at most what the frame's arena has left and stop the batch if it would run
+        // over, instead of refusing the whole batch (a drop) when the bound does not fit
+        const int bound = (int)bt.num_tris * 5 + 2 * (int)bt.num_strips, room = eng::vtx_room();
+        const int cap = bound < room ? bound : room;
+        if (bound > room && room < 16) { eng::vtx_begin(bound); return false; }   // refused (a drop): the arena is really full
+        eng::Vert3* out = eng::vtx_begin(cap);
         if (!out) return false;
         int used = 0, tris = 0;
+        bool full = false;
         const uint16_t* w = m.strips + bt.first_word;
         const uint16_t* end = w + bt.num_words;
-        while (w < end) {
+        while (w < end && !full) {
             const int len = *w++;
             bool open = false;
             for (int j = 0; j + 2 < len; ++j) {
+                if (used + 8 > cap) { full = true; break; }          // at most 4 (a strip opening) or 5 (a clipped triangle)
                 int a = w[j], b = w[j + 1], c = w[j + 2];
                 const bool fa = g_xt[a].W >= near_w, fb = g_xt[b].W >= near_w, fc = g_xt[c].W >= near_w;
                 if (fa && fb && fc) {

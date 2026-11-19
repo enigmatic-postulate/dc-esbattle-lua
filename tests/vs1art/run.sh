@@ -24,8 +24,8 @@ if out=$(python3 tools/vs1art/import_props.py --check); then ok "import_props.py
 if out=$(python3 tests/vs1art/check_props.py); then ok "props and textures == VS1's (VS1's own reader): $(echo "$out" | grep -c '^ok') checks, every triangle where VS1 put it, RGB565 bit for bit, the vine's alpha thresholded"; else bad "props/textures vs VS1" "$(echo "$out" | grep FAIL)"; fi
 if out=$(python3 tests/vs1art/check_chars.py); then ok "characters: the converter keeps every VS1 triangle (6 models); each shipped character = VS1's head parts + our body, our skeleton and clips, VS1's texture and eye glow"; else bad "characters" "$(echo "$out" | grep FAIL)"; fi
 OUT="$W/chars" bash tools/vs1art/build_chars.sh > /dev/null
-same=1; for n in knight skel_warrior skel_mage skel_rogue wren brom; do cmp -s "$W/chars/$n.dmf" romdisk/models/$n.dmf || same=0; done
-[ $same = 1 ] && ok "build_chars.sh reproduces the 6 shipped characters byte for byte" || bad "build_chars.sh output differs from romdisk/models"
+same=1; for n in knight skel_warrior skel_mage skel_rogue wren brom corwin; do cmp -s "$W/chars/$n.dmf" romdisk/models/$n.dmf || same=0; done
+[ $same = 1 ] && ok "build_chars.sh reproduces the 7 shipped characters byte for byte (slice 3D-6: Corwin)" || bad "build_chars.sh output differs from romdisk/models"
 if [ -n "${VS1PY:-}" ]; then
   KK="${KAYKIT:-../KayKit}"; AN="$KK/Animations"
   T "$VS1PY" tools/vs1art/vs1_fbx2dmf.py --model "$KK/Characters/Skeleton_Warrior.fbx" --texture "$KK/Characters/skeleton_texture.png" \
@@ -37,8 +37,8 @@ if [ -n "${VS1PY:-}" ]; then
   cmp -s "$W/skeleton.dmf" assets/vs1_art/models/skeleton.dmf && cmp -s "$W/mage.dmf" assets/vs1_art/models/mage.dmf && \
     ok "the vendored VS1 converter reproduces VS1's uploaded skeleton.dmf and mage.dmf byte for byte" || bad "vendored VS1 converter differs from VS1's files"
   TMO=600 T env VS1PY="$VS1PY" KAYKIT="$KK" VS1OUT="$W/vs1" OUT="$W/chars2" bash tools/vs1art/build_chars.sh > /dev/null
-  same=1; for n in barbarian skeleton_mage skeleton_rogue; do cmp -s "$W/vs1/$n.dmf" assets/vs1_art/models/$n.dmf || same=0; done
-  [ $same = 1 ] && ok "VS1's recipe rebuilds the Barbarian, Skeleton_Mage and Skeleton_Rogue byte for byte" || bad "VS1-recipe characters differ"
+  same=1; for n in barbarian skeleton_mage skeleton_rogue ranger; do cmp -s "$W/vs1/$n.dmf" assets/vs1_art/models/$n.dmf || same=0; done
+  [ $same = 1 ] && ok "VS1's recipe rebuilds the Barbarian, Skeleton_Mage, Skeleton_Rogue and Ranger byte for byte" || bad "VS1-recipe characters differ"
 fi
 
 echo "== the village: VS1's layout and ground, the GDD's positions"
@@ -51,6 +51,7 @@ if out=$(python3 tests/vs1art/check_ground.py "$W/gt/frame_00030.txt" romdisk/ma
 
 echo "== the painted village ground (docs/GROUND_ART.md)"
 if out=$(python3 tools/ground/paint_ground.py --check); then ok "paint_ground.py reproduces romdisk/maps/village.gnd byte for byte ($(echo "$out" | grep -o 'VQ PSNR [0-9.]* dB'))"; else bad "paint_ground.py --check" "$out"; fi
+if out=$(python3 tools/ground/paint_ground.py romdisk/maps/barrow.txt --check); then ok "paint_ground.py reproduces romdisk/maps/barrow.gnd byte for byte (slice 3D-6: the barrow palette; $(echo "$out" | grep -o 'VQ PSNR [0-9.]* dB'))"; else bad "paint_ground.py --check (barrow)" "$out"; fi
 if out=$(python3 tests/vs1art/check_gnd.py "$W/gd/frame_00030.txt"); then ok "$(echo "$out" | tr '\n' ' ' | sed 's/  */ /g')"; else bad "painted ground" "$out"; fi
 
 echo "== the field camera (VS1's: 9 up, 9 back, FOV 32, clamped to the map)"

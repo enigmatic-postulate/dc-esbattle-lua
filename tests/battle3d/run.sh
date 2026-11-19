@@ -98,24 +98,25 @@ if cmp -s "$W/hold.log" "$W/hold--bot-hold-a.log" && [ "$(cat "$W/hold--bot-hold
   ok "holding A: the same battle turn for turn in $(cat "$W/hold--bot-hold-a.n") ticks instead of $(cat "$W/hold.n")"
 else bad "hold A (2x)" "ticks $(cat "$W/hold.n") -> $(cat "$W/hold--bot-hold-a.n")"; fi
 
-echo "== game flow: field -> 3D battle -> field, the Warden appears with Wren's token, the boss fight, game over"
+echo "== game flow: field -> 3D battle -> field, the gate, the barrow, the boss fight, the ending; a loss shows the death screen"
 python3 -c "print('\n'.join(['0.0166667 00'] * 40000))" > "$W/idle.in"
-# slice 3D-5: the story driver (platform/host/story.cpp) walks the route; the bot plays the three battles
-TMO=300 T ./build/battle_trace_f32 - "$W/flow.trace" --state-only --story --route tests/battle3d/flow.route --bot-battles "boss:good:1" --max-ticks 40000 > /dev/null
-last=$(grep "^X mode=" "$W/flow.trace" | tail -1)
+# slice 3D-5: the story driver (platform/host/story.cpp) walks the route; the bot plays the three battles. Slice 3D-6: the
+# Warden is the barrow's; his win runs the ending (T10), the credits, the results, and the title comes back with its crest
+TMO=300 T ./build/battle_trace_f32 - "$W/flow.trace" --state-only --story --route tests/battle3d/flow.route --bot-battles "boss:good:1" --max-ticks 40000 > /dev/null 2>&1
+res=$(grep "^E route" "$W/flow.trace")
 battles=$(grep -c " battle$" <(grep "^N " "$W/flow.trace"))
-if echo "$last" | grep -q "mode=field" && echo "$last" | grep -q "slime_a:[0-9,:]*:gone" && echo "$last" | grep -q "slime_b:[0-9,:]*:gone" \
-   && echo "$last" | grep -q "warden:[0-9,:]*:gone" && [ "$battles" = 3 ]; then
-  ok "three battles won from the field; both patrols and the Warden gone; back on the field ($(echo "$last" | grep -o 'hp=[0-9/]*'))"
-else bad "game flow" "$(echo "$last" | cut -c1-300) battles=$battles"; fi
+if echo "$res" | grep -q "done: [0-9]* expectations, 0 failures" && [ "$battles" = 3 ]; then
+  ok "three battles won from the field (both patrols, then the Warden in the barrow); the ending ran to the title ($res)"
+else bad "game flow" "$res battles=$battles"; fi
 grep "^N " "$W/flow.trace" | awk '{print $3}' | tr '\n' ' ' > "$W/flow_modes.txt"
-# after a won battle the field returns, or the after_battle script's dialog over it (slice 3D-5)
-[ "$(grep -oE "to_battle battle to_field (field|dialog)" "$W/flow_modes.txt" | wc -l)" = 3 ] && ! grep -q game_over "$W/flow_modes.txt" && \
-  ok "transitions field -> to_battle -> battle -> to_field -> field (or the after_battle dialog), three times" || bad "mode sequence" "$(cat "$W/flow_modes.txt")"
-# a lost battle: game over, then A restores every entity (the Warden dormant again)
+# after a won battle the field returns, or the after_battle script's dialog over it (slice 3D-5); the boss's win hands over
+# to the ending (to_field = T10 over the battle, then the ending's dialog) - slice 3D-6
+[ "$(grep -oE "to_battle battle to_field (field|dialog)" "$W/flow_modes.txt" | wc -l)" = 3 ] && ! grep -q "death" "$W/flow_modes.txt" && \
+  ok "transitions field -> to_battle -> battle -> to_field -> field (or a dialog), three times" || bad "mode sequence" "$(cat "$W/flow_modes.txt")"
+# a lost battle: the death screen (slice 3D-6; it replaced the game-over screen), then A restores every entity
 TMO=300 T ./build/battle_trace_f32 "$W/idle.in" "$W/lose.trace" --state-only --bot-battles "guard" --rules legacy \
   --walk-to "20.5,15.6;27.5,15.6" --max-ticks 6000 > /dev/null
-if grep -q "mode=game_over" "$W/lose.trace"; then ok "a lost battle ends in the game-over screen"; else bad "no game over after a lost battle"; fi
+if grep -q "mode=death" "$W/lose.trace"; then ok "a lost battle ends in the death screen"; else bad "no death screen after a lost battle"; fi
 
 echo "== frame budget and determinism of the 3D battles (<= 18,000 submitted vertices: docs/SLICE_VS1_ART.md, Budgets)"
 budget_fail=""

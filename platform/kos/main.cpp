@@ -78,9 +78,11 @@ static_assert(offsetof(eng::Vert3, argb) == offsetof(pvr_vertex_t, argb), "Vert3
 static_assert(offsetof(eng::Vert3, oargb) == offsetof(pvr_vertex_t, oargb), "Vert3 oargb");
 static_assert(eng::VERT == PVR_CMD_VERTEX && eng::VERT_EOL == PVR_CMD_VERTEX_EOL, "Vert3 commands");
 
-struct Material3 { pvr_poly_hdr_t hdr; pvr_list_t list; };
+// Slice 3D-6: every material also has a fogged header (PVR table fog), used while eng::set_fog is on (the barrow).
+struct Material3 { pvr_poly_hdr_t hdr; pvr_poly_hdr_t hdr_fog; pvr_list_t list; };
 static Material3 g_mats[256];       // village ~90 (house variants per yaw x opaque/faded copies) + battle ~30
 static int g_nmats = 0;
+static bool g_fog_on = false;       // eng::set_fog (never set in NO_FOG builds)
 
 // 640 KiB. Slice 3D-5: was 16,384 (512 KiB) - the untouched 3D-4 build already peaked at 15,844 on the field
 // scripts and Wren and Brom took it to 16,363; a full arena drops the last batches (props). 20,480 x 32 B plus
@@ -97,7 +99,8 @@ static void flush_3d(pvr_list_t list) {
         const Batch3& b = g_batches3[i];
         const Material3& m = g_mats[b.mat - 1];
         if (m.list != list) continue;
-        pvr_prim(&m.hdr, sizeof(m.hdr));
+        const pvr_poly_hdr_t* hdr = g_fog_on ? &m.hdr_fog : &m.hdr;
+        pvr_prim(hdr, sizeof(*hdr));
 #if defined(R3D_SAFE)
         for (int k = 0; k < b.count; ++k) pvr_prim(&g_arena[b.first + k], sizeof(pvr_vertex_t));
 #else
@@ -282,6 +285,12 @@ void sprite_draw_uv(Sprite handle, float x, float y, float w, float h, float a,
     else             g_q_nearest[handle - 1].push_back(cmd);
 }
 
+void sprite_reserve(Sprite handle, int nearest, int bilinear) {
+    if (handle < 1 || handle > g_sprite_count) return;
+    if (nearest > 0) g_q_nearest[handle - 1].reserve((size_t)nearest);
+    if (bilinear > 0) g_q_bilinear[handle - 1].reserve((size_t)bilinear);
+}
+
 void sprite_draw(Sprite handle, float x, float y, float w, float h, float a, int filter) {
     sprite_draw_uv(handle, x, y, w, h, a, 0.0f, 0.0f, 1.0f, 1.0f, filter);
 }
@@ -373,7 +382,7 @@ Material material_create(Sprite tex, int flags) {
     if (g_nmats >= (int)(sizeof(g_mats) / sizeof(g_mats[0]))) { BOOT("material limit reached\n"); return 0; }
     if (tex < 0 || tex > g_sprite_count) return 0;
     Material3& m = g_mats[g_nmats];
-    m.list = (flags & (MAT_TRANSLUCENT | MAT_ADDITIVE)) ? PVR_LIST_TR_POLY : PVR_LIST_OP_POLY;
+    m.list = (flags & (MAT_TRANSLUCENT | MAT_ADDITIVE | MAT_MULTIPLY)) ? PVR_LIST_TR_POLY : PVR_LIST_OP_POLY;
     pvr_poly_cxt_t cxt;
     if (tex) {
         const ::Sprite& s = g_sprites[tex - 1];
@@ -383,12 +392,19 @@ Material material_create(Sprite tex, int flags) {
         pvr_poly_cxt_col(&cxt, m.list);
     }
     // Front faces are counter-clockwise on screen (render3d.h): cull the clockwise ones.
-    cxt.gen.culling = (flags & MAT_CULL) ? PVR_CULLING_CW : PVR_CULLING_NONE;
+    cxt.gen.culling = (flags & MAT_CULL) ? PVR_CULLING_CW : (flags & MAT_CULL_FRONT) ? PVR_CULLING_CCW : PVR_CULLING_NONE;
     if (flags & MAT_ADDITIVE) {                   // glows/sparks/fire: dst + src * src_alpha
         cxt.blend.src = PVR_BLEND_SRCALPHA;
         cxt.blend.dst = PVR_BLEND_ONE;
     }
+    if (flags & MAT_MULTIPLY) {                   // slice 3D-6: a tint over the frame: dst * src colour
+        cxt.blend.src = PVR_BLEND_DESTCOLOR;
+        cxt.blend.dst = PVR_BLEND_ZERO;
+    }
     pvr_poly_compile(&m.hdr, &cxt);
+    // Slice 3D-6: the same with PVR table fog (the barrow). Screen tints are never fogged.
+    if (!(flags & MAT_MULTIPLY)) cxt.gen.fog_type = PVR_FOG_TABLE;
+    pvr_poly_compile(&m.hdr_fog, &cxt);
     DIAG("material %d: tex %d flags %d list %d\n", g_nmats + 1, tex, flags, (int)m.list);
     return ++g_nmats;
 }
@@ -400,6 +416,8 @@ Vert3* vtx_begin(int max) {
     return reinterpret_cast<Vert3*>(&g_arena[g_arena_used]);
 }
 
+int vtx_room() { return g_arena_open >= 0 ? 0 : ARENA_VERTS - g_arena_used; }
+
 void vtx_end(Material m, int used) {
     if (g_arena_open < 0) return;
     const int first = g_arena_open;
@@ -409,6 +427,47 @@ void vtx_end(Material m, int used) {
     if (g_arena_used > g_arena_peak) g_arena_peak = g_arena_used;
     g_batches3[g_nbatches3++] = Batch3{ m, first, used };
 }
+
+// Slice 3D-6: the barrow's painted ground reuses the village's VQ slot (same size). The caller guarantees the slot
+// was not drawn in the last 2 frames (a map change happens under a full fade), as for texture_update.
+bool texture_update_vq(Sprite handle, const void* data, int bytes) {
+    if (handle < 1 || handle > g_sprite_count || !data) return false;
+    ::Sprite* s = &g_sprites[handle - 1];
+    if (!s->tex) return false;
+    const int w = (int)s->img.w, h = (int)s->img.h;
+    if (bytes != VQ_CODEBOOK_BYTES + w * h / 4) return false;
+#if defined(GROUND_NO_VQ)
+    if (!s->img.data || s->img.byte_count != (uint32_t)(w * h * 2)) return false;
+    vq_decode((const uint8_t*)data, w, h, (uint16_t*)s->img.data);   // the slot's own linear buffer (boot-time malloc)
+    pvr_txr_load_kimg(&s->img, s->tex, PVR_TXRLOAD_16BPP);
+#else
+    if (s->img.byte_count != 0 || !(s->pvr_fmt & (int)PVR_TXRFMT_VQ_ENABLE)) return false;
+    pvr_txr_load((void*)data, s->tex, (size_t)bytes);
+#endif
+    DIAG("texture_update_vq(%d, %d bytes)\n", handle, bytes);
+    return true;
+}
+
+// Slice 3D-6: table fog (the barrow at night). make NO_FOG=1 keeps it off (TRIAGE: if fog looks wrong on hardware).
+void set_fog(bool on, uint32_t rgb, float start, float end) {
+#if defined(NO_FOG)
+    (void)on; (void)rgb; (void)start; (void)end;
+    g_fog_on = false;
+#else
+    // called every field frame: only a change touches the PVR's fog registers and table
+    static uint32_t last_rgb = 0xFFFFFFFFu;
+    static float last_start = -1.0f, last_end = -1.0f;
+    if (on && (rgb != last_rgb || start != last_start || end != last_end)) {
+        pvr_fog_table_color(1.0f, (float)((rgb >> 16) & 255) / 255.0f, (float)((rgb >> 8) & 255) / 255.0f, (float)(rgb & 255) / 255.0f);
+        pvr_fog_table_linear(start, end > start + 0.1f ? end : start + 0.1f);
+        last_rgb = rgb; last_start = start; last_end = end;
+    }
+    if (on != g_fog_on) DIAG("fog %s: %06lx %.1f..%.1f\n", on ? "on" : "off", (unsigned long)(rgb & 0xFFFFFF), (double)start, (double)end);
+    g_fog_on = on;
+#endif
+}
+
+void audio_event(const char*) {}                 // slice 3D-6: no audio path yet (the hooks only; see engine.h)
 
 void set_clear_color(uint32_t rgb) {
     pvr_set_bg_color((float)((rgb >> 16) & 255) / 255.0f, (float)((rgb >> 8) & 255) / 255.0f, (float)(rgb & 255) / 255.0f);
@@ -534,8 +593,22 @@ int main(int, char**) {
     check_file("/rd/scripts/speakers.txt");
     check_file("/rd/models/wren.dmf");
     check_file("/rd/models/brom.dmf");
+    // slice 3D-6: the barrow, Corwin, the frame around the game
+    check_file("/rd/maps/maps.txt");
+    check_file("/rd/maps/lights.txt");
+    check_file("/rd/maps/barrow.txt");
+    check_file("/rd/maps/barrow.gnd");
+    check_file("/rd/scripts/barrow.txt");
+    check_file("/rd/scripts/ending.txt");
+    check_file("/rd/scripts/credits.txt");
+    check_file("/rd/models/corwin.dmf");
+    check_file("/rd/models/waystone.dmf");
+    check_file("/rd/models/dead_tree.dmf");
+    check_file("/rd/models/iron_fence.dmf");
+    check_file("/rd/tex/logo.tex");
+    check_file("/rd/ui/ui.uia");                  // the UI font and icons (docs/UI_ART.md)
     {
-        static const char* const PORTRAITS[] = { "rowan", "wren", "brom" };
+        static const char* const PORTRAITS[] = { "rowan", "wren", "brom", "corwin", "warden" };
         static const char* const VARIANTS[] = { "neutral", "happy", "worried" };
         char p[64];
         for (const char* n : PORTRAITS)
@@ -546,7 +619,7 @@ int main(int, char**) {
 #if !defined(DIAG_SKIP_GAME)
     DIAG("main: game_init begin\n");
     BOOT("game_init begin\n");
-    if (!bt::game_init("/rd/maps/village.txt")) BOOT("game_init: map failed to load (see 'map error' above)\n");
+    if (!bt::game_boot()) BOOT("game_boot: the village or the scripts failed to load (see 'map error' / 'script:' above)\n");
     BOOT("game_init done: %d textures, %lu KiB texture VRAM used, %lu KiB free, heap %d KiB\n", g_sprite_count,
          (unsigned long)(g_vram_bytes / 1024), (unsigned long)(pvr_mem_available() / 1024), mallinfo().uordblks / 1024);
     DIAG("main: game_init done, VRAM textures %lu KiB in %d sprite slots\n",

@@ -563,6 +563,9 @@ static void build_crumble(Seq& s) {
     cue(s, 20, OP_END, -1);
 }
 
+static bool g_short_intro = false;     // slice 3D-6 (BA4): the field's T8 already showed the name card
+void battle3d_set_short_intro(bool on) { g_short_intro = on; }
+
 static void build_intro(Seq& s) {
     cam_set_goal(SHOT_INTRO, -1, -1, 1.0f);
     g_b3.cam.cur = shot_for(SHOT_INTRO, nullptr, nullptr);     // cut now (the next cue eases away from it)
@@ -576,7 +579,7 @@ static void build_intro(Seq& s) {
         last = t + anim::clip_ticks(g_b3.lib, aw);
         t += 10;
     }
-    if (g_b3.boss_vi >= 0) {                       // the boss intro runs until his name card has faded
+    if (g_b3.boss_vi >= 0 && !g_short_intro) {     // the boss intro runs until his name card has faded
         cue(s, 24, OP_NAMECARD, -1);
         if (last + 4 < 24 + 110) last = 24 + 110 - 4;
     }

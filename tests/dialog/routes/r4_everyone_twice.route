@@ -1,4 +1,5 @@
-# Route 4: talk to everyone twice at every stage, then the Warden. Answers are queued before the talk they are for.
+# Route 4: talk to everyone twice at every stage (slice 3D-6: Corwin too, before and after the token), up to the open gate.
+# Answers are queued before the talk they are for.
 # S0
 choose cancel
 talk wren                       # "Not now."
@@ -9,6 +10,9 @@ talk brom                       # first talk: the potions
 expect potions=3 talked_brom=1
 choose cancel
 talk brom                       # "Later."
+talk corwin                     # "Nobody goes east."
+talk corwin
+expect stage=0 gate_open=0
 choose 0
 talk wren                       # accept -> S1
 expect stage=1 skill_fire=1 cp=1
@@ -46,14 +50,15 @@ expect brom_refill=1 potions=3 cp=9
 choose 0
 talk brom                       # rest, no second refill
 expect brom_refill=1 potions=3 cp=9
-policy boss:good:1
-chase warden
-# S6
-expect stage=6 warden_down=1
+talk corwin                     # the token -> S4
+expect stage=4 gate_open=1
+talk corwin                     # "Shield up..."
+# S4
 talk wren
 talk wren
 choose cancel
 talk brom
 choose cancel
 talk brom
-expect stage=6 max_hp=30 patrol_a=1 patrol_b=1 skill_fire=1 has_token=1 warden_down=1 talked_brom=1 brom_refill=1
+talk corwin
+expect stage=4 max_hp=30 patrol_a=1 patrol_b=1 skill_fire=1 has_token=1 gate_open=1 talked_brom=1 brom_refill=1

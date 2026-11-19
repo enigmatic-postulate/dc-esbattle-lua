@@ -8,7 +8,8 @@
   * the only deliberate difference is the wagon (moved out of the patrols' path for the frame budget,
     docs/SLICE_VS1_ART.md), checked to be where the doc says;
   * GDD 6/9 positions: Rowan spawns at the west gate (2,15), Wren at (6,17), Brom at (21,10), the patrols at
-    (31,6) and (26,15).
+    (31,6) and (26,15); slice 3D-6: Corwin on the east road (37,13), the road block's trigger across the road's last
+    tiles (38,14 2x4) and the east exit (39,15 1x2, to the barrow), as GDD 15.2 writes them.
 
     python3 tests/vs1art/check_layout.py [OURS VS1 CATALOG]
 """
@@ -16,7 +17,8 @@ import os, sys
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..')
 MOVED = {'wagon': (10.0, 6.0)}          # deliberate moves (model -> our centre)
-GDD = {'spawn': (2, 15), 'wren': (6, 17), 'brom': (21, 10), 'slime_a': (31, 6), 'slime_b': (26, 15)}
+GDD = {'spawn': (2, 15), 'wren': (6, 17), 'brom': (21, 10), 'slime_a': (31, 6), 'slime_b': (26, 15), 'corwin': (37, 13)}
+GDD_RECTS = {('trigger', 'road_block'): (38, 14, 2, 4), ('exit', 'east'): (39, 15, 1, 2)}   # slice 3D-6 (GDD 15.2)
 
 
 def read(path):
@@ -69,10 +71,14 @@ def main():
     for k, v in GDD.items():
         if have.get(k) != v:
             errs.append('%s at %s, the GDD says %s' % (k, have.get(k), v))
+    rects = {(p[0], p[1]): tuple(int(x) for x in p[2:6]) for p in rest if p[0] in ('trigger', 'exit') and len(p) >= 6}
+    for k, v in GDD_RECTS.items():
+        if rects.get(k) != v:
+            errs.append('%s %s at %s, the GDD says %s' % (k[0], k[1], rects.get(k), v))
     if errs:
         print('\n'.join(errs)); return 1
-    print('village == VS1: %dx%d tiles, %d props at VS1\'s footprints (the wagon moved, as documented); GDD positions: %s' % (
-        w, h, len(got), ', '.join('%s %s' % (k, v) for k, v in GDD.items())))
+    print('village == VS1: %dx%d tiles, %d props at VS1\'s footprints (the wagon moved, as documented); GDD positions: %s; %s' % (
+        w, h, len(got), ', '.join('%s %s' % (k, v) for k, v in GDD.items()), ', '.join('%s %s %s' % (k[0], k[1], v) for k, v in GDD_RECTS.items())))
     return 0
 
 

@@ -9,6 +9,7 @@
 #include "status.h"
 #include "targeting.h"
 #include "text.h"
+#include "uitext.h"
 #include "ui.h"
 #include <stdio.h>
 #include <string.h>
@@ -67,6 +68,15 @@ static void make_holder_gfx(ModelGfx* out, int wpn_model, eng::Sprite holder_tex
         int f = eng::MAT_BILINEAR | (faded ? eng::MAT_TRANSLUCENT | eng::MAT_CULL : 0);
         out->single[k] = out->doubled[k] = eng::material_create(textured ? holder_tex : 0, f);
     }
+}
+
+// Slice 3D-6: the field's glows (the open exit, the boss ring, the wisp) use the same atlas and material.
+bool battle3d_fx(int which, eng::Material* additive, float uv[4]) {
+    static const int CELL[3] = { FX_GLOW, FX_RING, FX_RUNE };
+    if (!g_fx_add || which < 0 || which > 2) return false;
+    *additive = g_fx_add;
+    for (int k = 0; k < 4; ++k) uv[k] = g_fx_uv[CELL[which]][k];
+    return true;
 }
 
 void b3_draw_init() {
@@ -195,6 +205,7 @@ static void draw_view(View& v, int vi, const Camera& cam, bool dim) {
     const float radius = 1.6f * v.scale * 1.15f;
     const uint32_t* lit = view_lit(v, vi);
     const bool flash = v.flash > 0 && (v.flash & 2);
+    cel_hull_next(cel().chars >= 0.5f && (cel().chars < 1.5f || v.kind == K_HERO) && v.alpha >= 0.999f, false);          // cel prototype (docs/CEL_SHADING_STUDY.md)
     if (flash) {
         draw_model_in(cam, g_b3.arena->light, g_flash[v.kind], world, skin, hips, radius, 0xFFFFFFFFu, g_white_cols);
     } else if (v.alpha < 0.999f && lit) {
@@ -213,6 +224,7 @@ static void draw_view(View& v, int vi, const Camera& cam, bool dim) {
     if (dim) tint = 0xFF000000u | ((tint >> 1) & 0x7F7F7Fu) | ((tint >> 2) & 0x3F3F3Fu);
     const int slots[2] = { slot_r, slot_l };
     const int wv0 = stats().verts_out;
+    if (cel().weapons < 0.5f) cel_hull_next(false, false);                     // cel prototype: weapons only on request
     for (int s = 0; s < 2; ++s) {
         if (kr.wpn[s] < 0 || slots[s] < 0) continue;
         const Mat34 ww = mat_mul(world, bw[slots[s]]);
@@ -220,6 +232,7 @@ static void draw_view(View& v, int vi, const Camera& cam, bool dim) {
         else draw_model(cam, g_b3.arena->light, flash ? g_wpn_flash[v.kind][s] : g_wpn[v.kind][s], ww, nullptr, flash ? 0xFFFFFFFFu : tint);
     }
     g_b3.cost[1] += stats().verts_out - wv0;
+    cel_hull_next(false, false);
     // blob shadow (fades with the body)
     draw_blob_shadow(cam, g_shadow, v3(v.pos.x, 0, v.pos.z), 0.62f * v.scale / 0.8f, (int)(T_SHADOW_ALPHA * v.alpha));
 }
@@ -287,14 +300,32 @@ static void hud_bar(float x, float y, float w, float h, float frac, float ghost,
 
 static uint32_t hp_color(float f) { return f > 0.5f ? 0xFF38B764 : (f > 0.25f ? 0xFFFFCD75 : 0xFFEF7D57); }
 
-static void draw_text_outline(float x, float y, const char* s, int scale, uint32_t argb, float z, bool centre = true) {
-    if (centre) x -= (float)font_width(s, scale) * 0.5f;
-    const uint32_t o = argb & 0xFF000000u;
-    font_draw(x - scale, y, s, scale, o, false, z - 0.002f);
-    font_draw(x + scale, y, s, scale, o, false, z - 0.002f);
-    font_draw(x, y - scale, s, scale, o, false, z - 0.002f);
-    font_draw(x, y + scale, s, scale, o, false, z - 0.002f);
-    font_draw(x, y, s, scale, argb, false, z);
+// Outlined text: the UI font (uitext.h; the outline is baked into the atlas: one sprite per glyph - the 5x7 font needed
+// five). `cap` = the capitals' height in px (the old 5x7 scale k = 7k px).
+static void draw_text_outline(float x, float y, const char* s, float cap, uint32_t argb, float z, bool centre = true) {
+    ui_text_px(x, y, s, cap, argb, z, centre ? UA_CENTRE : UA_LEFT);
+}
+
+// The button prompts at the bottom (the 2D view keeps ui_draw_prompts): the UI icons and font.
+static UiIcon ui_of(Icon i) {
+    switch (i) {
+    case ICON_PAD_A: return UI_PAD_A;       case ICON_PAD_B: return UI_PAD_B;         case ICON_PAD_Y: return UI_PAD_Y;
+    case ICON_PAD_LEFT: return UI_PAD_LEFT; case ICON_PAD_RIGHT: return UI_PAD_RIGHT; case ICON_PAD_UP: return UI_PAD_UP;
+    case ICON_PAD_DOWN: return UI_PAD_DOWN; case ICON_PAD_START: return UI_PAD_START; default: return UI_ICON_COUNT;
+    }
+}
+static void prompts(const UiPrompt* p, int n) {
+    const float y = 446, x0 = 252;
+    float x = x0;
+    for (int i = 0; i < n; ++i) {
+        x += 6;
+        ui_icon(ui_of(p[i].a), x + 11, y + 9, 22.0f, 0xFFFFFFFFu, 0.95f); x += 22;
+        if (p[i].b != ICON_COUNT) { ui_icon(ui_of(p[i].b), x + 11, y + 9, 22.0f, 0xFFFFFFFFu, 0.95f); x += 22; }
+        x += 4;
+        ui_text(UF_S, x, y + 2, p[i].text, 0xFFF4F4F4, 0.96f);
+        x += ui_text_width(UF_S, p[i].text) + 6;
+    }
+    eng::gfx_rect_tr(x0, y - 5, x - x0 + 4, 28, 0xA0000000, 0.9f);   // under the icons and the text
 }
 
 static void draw_hud(BattleCtx& ctx, const Camera& cam, bool choosing) {
@@ -318,8 +349,9 @@ static void draw_hud(BattleCtx& ctx, const Camera& cam, bool choosing) {
         float sx, sy;
         if (!project(cam, f.p + v3(0, 0.9f * u, 0), &sx, &sy)) continue;
         const float a = u < 0.7f ? 1.0f : 1.0f - (u - 0.7f) / 0.3f;
-        const int pop = f.age < 4 ? 1 : 0;                     // a one-scale pop on arrival
-        draw_text_outline(sx, sy - 10, f.text, f.scale + pop, with_alpha(f.color, a), 4.0f);
+        const float pop = f.age < 6 ? 1.0f + 0.35f * (float)(6 - f.age) / 6.0f : 1.0f;   // a pop on arrival, easing out
+        const float cap = (f.scale >= 3 ? 24.0f : 14.0f) * pop;                     // numbers 24 px, labels 14 px
+        draw_text_outline(sx, sy - 10 - (cap - 14.0f) * 0.5f, f.text, cap, with_alpha(f.color, a), 4.0f);
     }
     // hero panel (bottom left)
     for (int i = 0; i < g_b3.num_views; ++i) {
@@ -328,18 +360,20 @@ static void draw_hud(BattleCtx& ctx, const Camera& cam, bool choosing) {
         const float x = 16, y = 408;
         eng::gfx_rect_tr(x, y, 236, 56, 0xB0101420, 2.0f);
         eng::gfx_rect_tr(x, y, 236, 2, 0xFFFFCD75, 2.01f);
-        font_draw(x + 10, y + 8, "HERO", 2, 0xFFFFCD75, true, 2.1f);
+        ui_text(UF_S, x + 10, y + 8, "HERO", 0xFFFFCD75, 2.1f);
         char hp[16];
         snprintf(hp, sizeof hp, "%d/%d", v.shown_hp, v.a->hp_max);
-        font_draw(x + 226 - (float)font_width(hp, 2), y + 8, hp, 2, v.shown_hp * 4 > v.a->hp_max ? 0xFFF4F4F4 : 0xFFEF7D57, true, 2.1f);
+        ui_text(UF_S, x + 226, y + 8, hp, v.shown_hp * 4 > v.a->hp_max ? 0xFFF4F4F4 : 0xFFEF7D57, 2.1f, 1.0f, UA_RIGHT);
         const float frac = (float)v.shown_hp / (float)v.a->hp_max;
         hud_bar(x + 10, y + 30, 216, 10, frac, v.bar / (float)v.a->hp_max, hp_color(frac), 2.05f);
-        if (v.guard_shown) font_draw(x + 10, y + 44, "GUARD", 1, 0xFF80D0FF, true, 2.1f);
-        if (v.burn_shown) font_draw(x + 50, y + 44, "BURN", 1, 0xFFFF8040, true, 2.1f);
+        if (v.guard_shown) ui_text(UF_S, x + 10, y + 43, "GUARD", 0xFF80D0FF, 2.1f, 0.72f);
+        if (v.burn_shown) ui_text(UF_S, x + 62, y + 43, "BURN", 0xFFFF8040, 2.1f, 0.72f);
         if (rules().potions) {
             char pc[16];
-            snprintf(pc, sizeof pc, "POTIONS %d", ctx.potions);
-            font_draw(x + 226 - (float)font_width(pc, 1), y + 44, pc, 1, ctx.potions ? 0xFFF0A0A0 : 0xFF808080, true, 2.1f);
+            snprintf(pc, sizeof pc, "X%d", ctx.potions);
+            ui_text(UF_S, x + 226, y + 43, pc, ctx.potions ? 0xFFF0A0A0 : 0xFF808080, 2.1f, 0.72f, UA_RIGHT);
+            ui_icon(UI_POTION_S, x + 226 - ui_text_width(UF_S, pc, 0.72f) - 9.0f, y + 48.0f, 16.0f,
+                    ctx.potions ? 0xFFFFFFFFu : 0x90808080u, 2.1f);
         }
     }
     // the boss: name and a wide HP bar at the top (GDD 12.5), a pip at half (the phase change)
@@ -348,7 +382,7 @@ static void draw_hud(BattleCtx& ctx, const Camera& cam, bool choosing) {
         if (!b.gone && !(b.dying && b.dead_t > b.collapse_t + 60)) {
             const float x = 170, y = 18, w = 300;
             eng::gfx_rect_tr(x - 10, y - 6, w + 20, 40, 0xB0100818, 2.0f);
-            draw_text_outline(320, y - 1, KINDS[b.kind].display, 2, 0xFFE0B0FF, 2.2f);
+            draw_text_outline(320, y - 1, KINDS[b.kind].display, 14, 0xFFE0B0FF, 2.2f);
             const float frac = (float)b.shown_hp / (float)b.a->hp_max;
             hud_bar(x, y + 18, w, 8, frac, b.bar / (float)b.a->hp_max, g_b3.boss_phase2 ? 0xFFE04060 : 0xFFA060E0, 2.05f);
             eng::gfx_rect_tr(x + w * 0.5f - 1, y + 15, 2, 14, 0xFFFFE0A0, 2.1f);
@@ -359,15 +393,15 @@ static void draw_hud(BattleCtx& ctx, const Camera& cam, bool choosing) {
         const char* text = g_b3.caption == CAP_CHARGE ? "THE WARDEN DRAWS IN THE DARK..." : "YOU WILL NOT TAKE THEM FROM ME.";
         const float a = g_b3.caption_t < 20 ? (float)g_b3.caption_t / 20.0f : 1.0f;
         eng::gfx_rect_tr(40, 352, 560, 40, with_alpha(0xFF100818, 0.75f * a), 6.0f);
-        if (g_b3.caption == CAP_PHASE) font_draw(56, 344, "THE BONE WARDEN", 1, with_alpha(0xFFE0B0FF, a), true, 6.1f);
-        draw_text_outline(320, 364, text, 2, with_alpha(g_b3.caption == CAP_CHARGE ? 0xFFD090FF : 0xFFF0E0FF, a), 6.1f);
+        if (g_b3.caption == CAP_PHASE) ui_text(UF_S, 56, 341, "THE BONE WARDEN", with_alpha(0xFFE0B0FF, a), 6.1f, 0.72f);
+        draw_text_outline(320, 365, text, 14, with_alpha(g_b3.caption == CAP_CHARGE ? 0xFFD090FF : 0xFFF0E0FF, a), 6.1f);
     }
     // the big name card of the intro
     if (g_b3.namecard_t > 0) {
         const int t = 110 - g_b3.namecard_t;
         const float a = t < 15 ? (float)t / 15.0f : (g_b3.namecard_t < 20 ? (float)g_b3.namecard_t / 20.0f : 1.0f);
         eng::gfx_rect_tr(0, 150, 640, 70, with_alpha(0xFF080410, 0.7f * a), 7.0f);
-        draw_text_outline(320, 168, "THE BONE WARDEN", 4, with_alpha(0xFFE0B0FF, a), 7.1f);
+        draw_text_outline(320, 170, "THE BONE WARDEN", 28, with_alpha(0xFFE0B0FF, a), 7.1f);
         eng::gfx_rect_tr(160, 206, 320 * (t < 30 ? (float)t / 30.0f : 1.0f), 2, with_alpha(0xFFA060E0, a), 7.05f);
     }
     if (!choosing || !ctx.active) return;
@@ -376,7 +410,7 @@ static void draw_hud(BattleCtx& ctx, const Camera& cam, bool choosing) {
     if (!hv) return;
     ActorList enemies = alive_enemies(ctx, *ctx.active);
     const Ui& ui = ctx.ui;
-    static const Icon RING_ICON[4] = { ICON_SWORD, ICON_FLAME, ICON_SHIELD, ICON_POTION };
+    static const UiIcon RING_ICON[4] = { UI_SWORD, UI_FLAME, UI_SHIELD, UI_POTION };
     static const char* const RING_NAME[4] = { "ATTACK", "FIRE", "GUARD", "POTION" };
     const int ncmd = ui_command_count();
     const float bob = shz_sinf((float)ui.bob_ticks * 0.12f) * 4.0f;
@@ -394,23 +428,24 @@ static void draw_hud(BattleCtx& ctx, const Camera& cam, bool choosing) {
             const float depth = 0.5f + 0.5f * sc.cos;                // 1 = front
             const bool empty = k == 3 && ctx.potions <= 0;        // no potions left: greyed
             const bool locked = k == 1 && fire_locked(ctx);       // slice 3D-5: Fire not learned yet - greyed + lock
-            uint32_t col = sel ? 0xFFFFFFFFu : with_alpha(0xFFC0C0C0u, 0.45f + 0.4f * depth);
+            // the medallions (docs/UI_ART.md) are dark already: unselected ones only dim a little, the back ones fade
+            uint32_t col = sel ? 0xFFFFFFFFu : with_alpha(0xFFD8D8D8u, 0.62f + 0.38f * depth);
             if (empty || locked) col = with_alpha(0xFF606060u, sel ? 0.9f : 0.5f);
-            icon_draw_tint((Icon)RING_ICON[k], sx, sy + (sel ? bob : 0.0f), sel ? 48.0f : 32.0f, col, sel ? 5.1f : 5.0f);
-            if (locked) text_icon_draw(TI_LOCK, sx + (sel ? 12.0f : 8.0f), sy + (sel ? bob : 0.0f) + (sel ? 12.0f : 8.0f), 1.0f,
-                                       sel ? 0xFFFFFFFFu : with_alpha(0xFFFFFFFFu, 0.45f + 0.4f * depth), sel ? 5.15f : 5.05f);
+            ui_icon(RING_ICON[k], sx, sy + (sel ? bob : 0.0f), sel ? 48.0f : 32.0f, col, sel ? 5.1f : 5.0f);
+            if (locked) ui_icon(UI_LOCK, sx + (sel ? 13.0f : 9.0f), sy + (sel ? bob : 0.0f) + (sel ? 13.0f : 9.0f), sel ? 24.0f : 18.0f,
+                                sel ? 0xFFFFFFFFu : with_alpha(0xFFFFFFFFu, 0.45f + 0.4f * depth), sel ? 5.15f : 5.05f);
             if (k == 3 && sel) {
                 char n[8];
                 snprintf(n, sizeof n, "X%d", ctx.potions);
-                draw_text_outline(sx + 20, sy + 10, n, 2, empty ? 0xFF909090 : 0xFFF4F4F4, 5.2f, false);
+                draw_text_outline(sx + 18, sy + 8, n, 14, empty ? 0xFF909090 : 0xFFF4F4F4, 5.2f, false);
             }
         }
         float sx, sy;
         if (project(cam, view_head(*hv) + v3(0, 0.35f, 0), &sx, &sy))
-            draw_text_outline(sx, sy - 24, RING_NAME[ui.home_i], 2, (ui.home_i == 1 && fire_locked(ctx)) ? 0xFF909090 : 0xFFFFCD75, 5.2f);
+            draw_text_outline(sx, sy - 26, RING_NAME[ui.home_i], 14, (ui.home_i == 1 && fire_locked(ctx)) ? 0xFF909090 : 0xFFFFCD75, 5.2f);
         static const UiPrompt P[] = { { ICON_PAD_A, ICON_COUNT, "SELECT" }, { ICON_PAD_LEFT, ICON_PAD_RIGHT, "CHOOSE" },
                                       { ICON_PAD_Y, ICON_COUNT, "GUARD" } };
-        ui_draw_prompts(P, 3);
+        prompts(P, 3);
         return;
     }
     if (ui.state == UiState::Target) {
@@ -419,15 +454,15 @@ static void draw_hud(BattleCtx& ctx, const Camera& cam, bool choosing) {
         if (!tv) return;
         float sx, sy;
         if (project(cam, view_head(*tv) + v3(0, 0.25f, 0), &sx, &sy)) {
-            draw_text_outline(sx, sy - 34, KINDS[tv->kind].display, 2, 0xFFFFCD75, 5.2f);
+            draw_text_outline(sx, sy - 36, KINDS[tv->kind].display, 14, 0xFFFFCD75, 5.2f);
         }
         static const UiPrompt P[] = { { ICON_PAD_A, ICON_COUNT, "ATTACK" }, { ICON_PAD_LEFT, ICON_PAD_RIGHT, "TARGET" },
                                       { ICON_PAD_B, ICON_COUNT, "BACK" } };
-        ui_draw_prompts(P, 3);
+        prompts(P, 3);
     } else {
-        draw_text_outline(320, 60, "ALL ENEMIES", 2, 0xFFEF7D57, 5.2f);
+        draw_text_outline(320, 60, "ALL ENEMIES", 14, 0xFFEF7D57, 5.2f);
         static const UiPrompt P[] = { { ICON_PAD_A, ICON_COUNT, "CAST FIRE" }, { ICON_PAD_B, ICON_COUNT, "BACK" } };
-        ui_draw_prompts(P, 2);
+        prompts(P, 2);
     }
 }
 
@@ -480,7 +515,9 @@ void battle3d_draw(BattleCtx& ctx) {
     }
     g_b3.cost[0] = stats().verts_out - c0 - g_b3.cost[1];
     const int a0 = stats().verts_out;
+    cel_hull_next(false, cel().props >= 0.5f);                               // cel prototype
     arena_draw(A, cam, &g_b3.cost[2]);
+    cel_hull_next(false, false);
     g_b3.cost[3] = stats().verts_out - a0 - g_b3.cost[2];
     const int f0 = stats().verts_out;
 
@@ -552,17 +589,20 @@ void battle3d_draw(BattleCtx& ctx) {
 
     // intro hint, result banner
     if (!g_b3.queue.empty() && g_b3.queue[0].kind == SEQ_INTRO) {
-        icon_draw_tint(ICON_PAD_A, 560, 452, 16, 0xFFFFFFFF, 6.0f);
-        font_draw(572, 446, "SKIP", 2, 0xFFF4F4F4, true, 6.0f);
+        ui_icon(UI_PAD_A, 566, 453, 24.0f, 0xFFFFFFFF, 6.0f);
+        ui_text(UF_S, 582, 446, "SKIP", 0xFFF4F4F4, 6.0f);
     }
-    if ((ctx.state == BattleState::Win || ctx.state == BattleState::Lose) && !battle3d_busy()) {
+    if ((ctx.state == BattleState::Win || (ctx.state == BattleState::Lose && !ctx.auto_lose)) && !battle3d_busy()) {
         const bool won = ctx.state == BattleState::Win;
         const int t = ctx.result_ticks;
         const float grow = t < 12 ? (float)t / 12.0f : 1.0f;
         // upper third: the hero's celebration (or fall) stays visible below
         eng::gfx_rect_tr(0, 40 + 44 * (1 - grow), 640, 88 * grow, 0xB0000000, 8.0f);
-        if (t >= 6) draw_text_outline(320, 52, won ? "VICTORY!" : "DEFEAT...", 4, won ? 0xFFFFCD75 : 0xFFEF7D57, 8.5f);
-        if (t >= 30 && (t / 20) % 2 == 0) draw_text_outline(320, 96, "PRESS A", 2, 0xFFF4F4F4, 8.5f);
+        if (t >= 6) {                                                                   // a short pop as it lands
+            const float pop = t < 14 ? 1.0f + 0.25f * (float)(14 - t) / 8.0f : 1.0f;
+            draw_text_outline(320, 56 - 17.0f * (pop - 1.0f), won ? "VICTORY!" : "DEFEAT...", 34.0f * pop, won ? 0xFFFFCD75 : 0xFFEF7D57, 8.5f);
+        }
+        if (t >= 30 && (t / 20) % 2 == 0 && !(won && ctx.auto_win)) draw_text_outline(320, 100, "PRESS A", 14, 0xFFF4F4F4, 8.5f);
     }
 }
 

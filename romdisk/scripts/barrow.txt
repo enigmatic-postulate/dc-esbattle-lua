@@ -1,0 +1,54 @@
+# barrow.txt - the barrow's scripts (slice 3D-6: "Into the Barrow"; GDD 7.4 / Appendix A). Compiled with village.txt and
+# ending.txt at boot (romdisk/maps/maps.txt); their actors are the barrow map's (romdisk/maps/barrow.txt). GDD lines are
+# kept verbatim; every change is marked "# slice 3D-6" with its reason.
+
+@flags warden_down
+@marker waystone ! stage == 4                             # slice 3D-6: GDD App. B (S4 -> S5): the stone wants a touch
+
+@script barrow_stone                                      # GDD App. A: the checkpoint stone (decision BA1: an object that talks)
+@if stage == 4
+  sys: An old waystone. You feel steadier. (Checkpoint)
+  heal
+  set stage 5                                             # slice 3D-6: before the checkpoint, so a retry keeps stage 5 (C3)
+  objective "Lay the Warden to rest"
+  checkpoint c3
+  end
+@else
+  sys: The waystone hums. You feel steadier. (Checkpoint)  # slice 3D-6: a second touch heals and saves again
+  heal
+  checkpoint c3
+  end
+@end
+
+@script ring_nudge                                        # slice 3D-6: the ring before the waystone (GDD pillar 3: no dead end)
+  sys: The dead are restless here. The old waystone by the path still hums.
+  end
+
+@script warden_intro skip                                 # GDD App. A (T8); Start skips it
+  letterbox on
+  face rowan warden
+  cam crypt 0
+  wait 40                                                 # slice 3D-6: a beat on the crypt before the crane
+  cam warden_rise 90
+  anim warden skel_awaken
+  wait 50
+  face warden rowan
+  namecard "THE BONE WARDEN"
+  warden: Another one. Always another one, walking where the sleepers lie.
+  rowan: Your seal is broken. Let me help you rest.
+  warden(worried): I do not rest. I guard. Kneel, or be kept.   # slice 3D-6: the GDD's (angry) is not a portrait variant
+  letterbox off
+  battle warden boss                                      # win: VICTORY without A, then T10 (slice 3D-6: T10 is the battle's
+  call ending                                             #   hand-over, not the ending's first line); loss: the death screen
+  end
+
+@script warden_retry skip                                 # slice 3D-6: a retry after losing to him runs this at once (GDD 13:
+  letterbox on                                            #   "straight to the short boss intro"; GDD 6 T8: 60 t)
+  face rowan warden
+  cam warden_rise 0
+  anim warden skel_awaken
+  wait 60
+  letterbox off
+  battle warden boss
+  call ending
+  end

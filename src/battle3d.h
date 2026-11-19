@@ -39,6 +39,13 @@ struct Battle3dInfo {
     float enemy_sx[MAX_ACTORS];
 };
 Battle3dInfo battle3d_info();
+// Slice 3D-6: the FX atlas for the field's glows. which: 0 a soft glow, 1 a ring, 2 a rune circle. false before
+// battle3d_init. uv: u0 v0 u1 v1 of the cell.
+bool battle3d_fx(int which, eng::Material* additive, float uv[4]);
+// Slice 3D-6: the boss's battle ends itself (GDD 14 E1): VICTORY without "press A" - after the banner has been up
+// BOSS_WIN_HOLD ticks the outcome is Won. And the battle intro's short form (no name card: the field's T8 showed
+// it, decision BA4). Both set before battle_begin, reset by it.
+void battle3d_set_short_intro(bool on);
 const char* battle3d_seq_name(int kind);
 
 }

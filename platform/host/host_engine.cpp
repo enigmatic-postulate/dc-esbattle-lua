@@ -23,6 +23,7 @@ extern "C" void* realloc(void* p, size_t n) { if (g_alloc_watch) ++g_alloc_count
 #endif
 
 FILE*       g_trace = nullptr;
+bool        g_audio_trace = false;        // slice 3D-6: audio hooks (no audio yet) - `A` lines in --story traces only
 bool        g_trace_draws = true;         // false: --state-only (only F and X lines)
 uint32_t    g_buttons = 0;                // active-high bitmask set by trace_main
 int         g_axis[2] = { 0, 0 };         // analog stick (-128..127) set by trace_main
@@ -49,12 +50,32 @@ alignas(32) static eng::Vert3 g_arena[ARENA_VERTS];   // 32-byte vertices, like 
 static int g_arena_used = 0, g_open = -1, g_batches = 0, g_batch_verts = 0;
 static uint32_t g_clear = 0;
 
+static bool g_fog_on = false;           // slice 3D-6: eng::set_fog, written to the frame dumps
+static uint32_t g_fog_rgb = 0;
+static float g_fog_start = 0, g_fog_end = 0;
+bool host_fog_on() { return g_fog_on; }
 static int g_drops = 0;                 // batches refused this frame (arena full), like the KOS backend's drops
 int host_arena_used() { return g_arena_used; }
 // Resource report (slice 3D-5 budgets): texture slots and their VRAM as the KOS backend would allocate it
 // (16-bit texels; PNG sizes from their IHDR), materials; per frame: 2D sprites and rects queued.
 static int g_sprites_frame = 0, g_rects_frame = 0;
 int host_sprites() { return g_sprites_frame; }
+// The KOS backend's per-texture sprite queues (platform/kos/main.cpp reserve_queues / sprite_reserve), mirrored: a frame
+// that queues more sprites on a texture than KOS reserved would make its std::vector grow - a heap allocation after
+// the boot on the Dreamcast, invisible to the host's allocation counter. Counted here; --sprite-queues reports them.
+static int g_q_res[eng::MAX_SPRITES][2], g_q_n[eng::MAX_SPRITES][2], g_q_peak[eng::MAX_SPRITES][2];
+static long g_q_over = 0;
+static void queue_defaults(int slot, bool alpha) {
+    g_q_res[slot][0] = alpha ? 640 : 16; g_q_res[slot][1] = alpha ? 64 : 16;
+}
+long host_queue_overflows() { return g_q_over; }
+void host_queue_report(FILE* f) {
+    fprintf(f, "D sprite queues: overflow draws %ld", g_q_over);
+    for (int i = 0; i < eng::MAX_SPRITES; ++i)
+        if (g_q_peak[i][0] || g_q_peak[i][1])
+            fprintf(f, "; tex %d peak %d/%d nearest, %d/%d bilinear", i + 1, g_q_peak[i][0], g_q_res[i][0], g_q_peak[i][1], g_q_res[i][1]);
+    fprintf(f, "\n");
+}
 int host_rects() { return g_rects_frame; }
 int host_materials() { return g_nmats; }
 int host_textures() { return g_nsprites; }
@@ -79,12 +100,14 @@ int host_batches() { return g_batches; }
 void host_frame_begin(int tick, bool dump) {
     g_arena_used = 0; g_open = -1; g_batches = 0; g_batch_verts = 0; g_drops = 0;
     g_sprites_frame = 0; g_rects_frame = 0;
+    memset(g_q_n, 0, sizeof g_q_n);
     if (dump && g_dump_dir) {
         char p[512];
         snprintf(p, sizeof p, "%s/frame_%05d.txt", g_dump_dir, tick);
         g_dump = fopen(p, "w");
         if (g_dump) {
             fprintf(g_dump, "frame %d\nclear %06X\n", tick, (unsigned)g_clear);
+            if (g_fog_on) fprintf(g_dump, "fog %06X %.4g %.4g\n", (unsigned)g_fog_rgb, g_fog_start, g_fog_end);
             for (int i = 0; i < g_nsprites; ++i) {
                 if (g_paths[i]) { fprintf(g_dump, "tex %d file %s %d\n", i + 1, g_paths[i], g_alpha[i] ? 1 : 0); continue; }
                 const MemTex& t = g_memtex[i];
@@ -113,6 +136,7 @@ namespace eng {
 Sprite sprite_load(const char* path, bool alpha) {
     if (g_nsprites >= MAX_SPRITES) return 0;
     g_alpha[g_nsprites] = alpha;
+    queue_defaults(g_nsprites, alpha);
     g_paths[g_nsprites++] = path;
     if (g_trace_draws) fprintf(g_trace, "L %s %d\n", path, alpha ? 1 : 0);
     return g_nsprites;
@@ -123,6 +147,7 @@ Sprite texture_create(const uint16_t* texels, int w, int h, int fmt) {
     MemTex& t = g_memtex[g_nsprites];
     t.w = w; t.h = h; t.fmt = fmt; t.version = 0; t.texels.assign(texels, texels + w * h); t.vq_bytes = 0;
     g_alpha[g_nsprites] = fmt != 1;
+    queue_defaults(g_nsprites, fmt != 1);
     g_paths[g_nsprites++] = nullptr;
     if (g_trace_draws) fprintf(g_trace, "L mem:%dx%d:fmt%d %d\n", w, h, fmt, fmt != 1 ? 1 : 0);
     return g_nsprites;
@@ -153,6 +178,20 @@ bool texture_update(Sprite s, const uint16_t* texels, bool twiddled) {
     return true;
 }
 
+bool texture_update_vq(Sprite s, const void* data, int bytes) {
+    if (s < 1 || s > g_nsprites || g_paths[s - 1] || !g_memtex[s - 1].vq_bytes || bytes != g_memtex[s - 1].vq_bytes) return false;
+    MemTex& t = g_memtex[s - 1];
+    vq_decode((const uint8_t*)data, t.w, t.h, t.texels.data());      // same size: no allocation
+    ++t.version;
+    g_tex_written[s - 1] = false;
+    if (g_trace_draws) fprintf(g_trace, "L update_vq:%d:v%d\n", s, t.version);
+    return true;
+}
+
+void set_fog(bool on, uint32_t rgb, float start, float end) {
+    g_fog_on = on; g_fog_rgb = rgb & 0xFFFFFFu; g_fog_start = start; g_fog_end = end;
+}
+
 Material material_create(Sprite tex, int flags) {
     if (g_nmats >= 256 || tex < 0 || tex > g_nsprites) return 0;
     g_mats[g_nmats] = Mat{ tex, flags };
@@ -164,6 +203,8 @@ Vert3* vtx_begin(int max) {
     g_open = g_arena_used;
     return g_arena + g_arena_used;
 }
+
+int vtx_room() { return g_open >= 0 ? 0 : ARENA_VERTS - g_arena_used; }
 
 void vtx_end(Material m, int used) {
     if (g_open < 0) return;
@@ -188,6 +229,12 @@ void sprite_draw_uv(Sprite s, float x, float y, float w, float h, float a,
                     float u0, float v0, float u1, float v1, int filter, uint32_t argb, float z) {
     if (s < 1 || s > g_nsprites) return;
     ++g_sprites_frame;
+    {   // the KOS queue mirror
+        const int q = filter == 2 ? 1 : 0;
+        const int c = ++g_q_n[s - 1][q];
+        if (c > g_q_peak[s - 1][q]) g_q_peak[s - 1][q] = c;
+        if (c > g_q_res[s - 1][q]) ++g_q_over;
+    }
     const char* name = g_paths[s - 1] ? g_paths[s - 1] : "<mem>";
     if (g_trace_draws)
         fprintf(g_trace, "S %s %.9g %.9g %.9g %.9g %.9g %d %.9g %.9g %.9g %.9g %08X %.9g\n", name,
@@ -195,6 +242,12 @@ void sprite_draw_uv(Sprite s, float x, float y, float w, float h, float a,
     if (g_dump)
         fprintf(g_dump, "s %d %.9g %.9g %.9g %.9g %.9g %d %.9g %.9g %.9g %.9g %08X %.9g\n", s,
                 x, y, w, h, a, filter == 2 ? 2 : 0, u0, v0, u1, v1, (unsigned)argb, z);
+}
+
+void sprite_reserve(Sprite s, int nearest, int bilinear) {   // KOS: reserves the queues; here: the mirror's capacity
+    if (s < 1 || s > g_nsprites) return;
+    if (nearest > g_q_res[s - 1][0]) g_q_res[s - 1][0] = nearest;
+    if (bilinear > g_q_res[s - 1][1]) g_q_res[s - 1][1] = bilinear;
 }
 
 void sprite_draw(Sprite s, float x, float y, float w, float h, float a, int filter) {
@@ -222,10 +275,17 @@ float random01() {
 }
 
 void dbg_print(const char* s) { fprintf(g_trace, "D %s\n", s); }
+void audio_event(const char* name) { if (g_trace && g_audio_trace) fprintf(g_trace, "A %s\n", name); }
 // Silent unless BOOT_LOG=1 (then stderr): shows the boot breadcrumb sequence the KOS build prints.
 void boot_log(const char* s) { static const char* e = getenv("BOOT_LOG"); if (e && *e == '1') fprintf(stderr, "[boot] %s\n", s); }
 
+// Slice 3D-6: a map change reads its map, its painted ground and new props from the romdisk. The C library's stdio (like
+// KOS's fs_open) allocates a file handle and frees it at close: not the game's allocation (net 0) - the allocation
+// counter is paused around the platform's file calls.
+struct AllocPause { int saved; AllocPause() : saved(g_alloc_watch) { g_alloc_watch = 0; } ~AllocPause() { g_alloc_watch = saved; } };
+
 int file_read(const char* path, char* buf, int cap) {
+    AllocPause pause;
     char real_path[512];
     if (strncmp(path, "/rd/", 4) == 0) snprintf(real_path, sizeof real_path, "%s/%s", g_romdisk, path + 4);
     else snprintf(real_path, sizeof real_path, "%s", path);
@@ -239,6 +299,7 @@ int file_read(const char* path, char* buf, int cap) {
 }
 
 bool file_exists(const char* path) {
+    AllocPause pause;
     char real_path[512];
     if (strncmp(path, "/rd/", 4) == 0) snprintf(real_path, sizeof real_path, "%s/%s", g_romdisk, path + 4);
     else snprintf(real_path, sizeof real_path, "%s", path);

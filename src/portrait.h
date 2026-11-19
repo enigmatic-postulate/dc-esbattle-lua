@@ -20,7 +20,7 @@ bool portrait_init();                             // the two slot textures (blan
 // Reads every speaker's three portraits into a static RAM cache (after script_load: the speakers are known),
 // so that uploads during play do no file I/O and no allocation (DoD T3). PORTRAIT_CACHE files at most;
 // a missing one is logged here, at load time. Returns the number of files cached.
-const int PORTRAIT_CACHE = 9;                     // 3 speakers x 3 variants (288 KiB of RAM)
+const int PORTRAIT_CACHE = 15;                    // 5 speakers x 3 variants (480 KiB of RAM; slice 3D-6: Corwin, the Warden)
 int  portrait_preload();
 // The slot should show speaker `speaker` (script speaker index) in `variant`. Loads now if the slot is
 // off screen, else after the blink. Unknown files log once and leave the slot as it was.

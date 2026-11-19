@@ -52,6 +52,9 @@ bool text_init() {
     if (hw[0] != TEX_W || hw[1] != TEX_H || hw[2] != 2) { eng::dbg_print("text: dialog.tex is not 256x128 ARGB4444"); return false; }
     memcpy(g_texels, buf + 32, sizeof g_texels);
     g_tex = eng::texture_create(g_texels, TEX_W, TEX_H, 2);
+    // the credits roll draws up to ~690 glyph sprites (shadowed) in a frame: more than an alpha texture's default queue
+    // of 640 - reserved at boot so that KOS never grows it (tools/ui/sprite_cost.py: per-texture peaks)
+    if (g_tex) eng::sprite_reserve(g_tex, 1024, 0);
     if (!g_tex) { eng::dbg_print("text: no texture slot for the dialog font"); return false; }
     g_ok = true;
     char msg[96];

@@ -35,6 +35,25 @@ void field3d_show_prompt(bool on);        // the 'A Talk' prompt over field_talk
 // returns false (and the field camera's eye) when the eye would be inside a prop's box (+0.3).
 bool field3d_two_shot(float hx, float hz, float nx, float nz, float eye[3], float look[3]);
 
+// ---- slice 3D-6 (docs/NEXT_SLICE_BARROW.md 5.5, 5.6)
+// Light presets (lights.h): set bakes everything now (map loads under a fade; `light`); a lerp blends props, the
+// ground and the fog in steps and lights the characters per frame until it ends, then re-bakes them a few buckets
+// per tick.
+void field3d_set_light(int preset);
+void field3d_light_lerp(int from, int to, int ticks);
+int  field3d_light_preset();
+bool field3d_light_busy();                // a lerp or its re-bake is running
+// The script camera: ease to shot `shot` of the map (field.h) over `ticks` (0: a cut); shot -1 = back to the
+// follow camera. busy while easing. release: back to the field camera at once (a cutscene ended or was skipped).
+void field3d_cam_shot(int shot, int ticks);
+bool field3d_cam_busy();
+bool field3d_cam_scripted();
+void field3d_cam_release();
+// An override camera (the title's orbit, the credits' flyover), set every tick it is wanted.
+void field3d_set_camera(const float eye[3], const float look[3], float fov);
+void field3d_clear_camera();
+void field3d_show_actors(bool hero, bool entities);   // the title backdrop shows no one
+
 // Host/tooling hook: set a named view parameter (see TUNES in field3d.cpp). false if unknown.
 bool field3d_tune(const char* name, float value);
 

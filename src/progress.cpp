@@ -5,7 +5,7 @@
 namespace bt {
 
 static Progress   g_p, g_cp;
-static QuestFlags g_qf = { -1, -1, -1, -1, -1 };
+static QuestFlags g_qf = { -1, -1, -1, -1, -1, -1, -1 };
 static char       g_names[MAX_FLAGS][16];
 static int        g_nflags = 0;
 
@@ -21,6 +21,8 @@ void progress_bind_flags(const char (*names)[16], int n) {
     g_qf.skill_fire = progress_flag_index("skill_fire");
     g_qf.has_token = progress_flag_index("has_token");
     g_qf.warden_down = progress_flag_index("warden_down");
+    g_qf.gate_open = progress_flag_index("gate_open");
+    g_qf.warden_seen = progress_flag_index("warden_seen");
 }
 
 int progress_flag_index(const char* name) {
@@ -31,8 +33,9 @@ int progress_flag_index(const char* name) {
 const char* progress_flag_name(int i) { return (i >= 0 && i < g_nflags) ? g_names[i] : "?"; }
 int progress_flag_count() { return g_nflags; }
 
-void progress_new_game(int spawn_x, int spawn_y, int spawn_dir, int objective) {
+void progress_new_game(int spawn_x, int spawn_y, int spawn_dir, int objective, int map) {
     memset(&g_p, 0, sizeof g_p);
+    g_p.map = (uint8_t)map;
     g_p.stage = 0;
     g_p.potions = 0;
     g_p.max_hp = START_MAX_HP;

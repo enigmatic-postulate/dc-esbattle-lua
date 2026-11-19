@@ -1,6 +1,7 @@
-# The game flow check (tests/battle3d/run.sh) since slice 3D-5: the Warden appears once Wren gives her token,
-# so the route is Wren (accept), the north-west patrol, the road patrol, Wren (the report), Brom (potions, then a
-# rest and the refill: the Warden is not winnable without potions, docs/NEXT_SLICE_DIALOG.md finding 5), the Warden.
+# The game flow check (tests/battle3d/run.sh). Slice 3D-6: the Warden is the barrow's (the gate opens with Wren's token,
+# Corwin steps aside), so the route is Wren (accept), the north-west patrol, the road patrol, Wren (the report), Brom
+# (potions, then a rest and the refill: the Warden is not winnable without potions, docs/NEXT_SLICE_DIALOG.md finding 5),
+# Corwin, the east exit, the waystone, the ring (the Warden's intro and battle), the ending, the credits, the title.
 choose 0
 talk wren
 chase slime_a
@@ -9,5 +10,10 @@ talk wren
 talk brom
 choose 0
 talk brom
+talk corwin
+exit east
+talk waystone
 policy boss:good:1
-chase warden
+goto 16 7
+until title
+expect warden_down=1 patrol_a=1 patrol_b=1 cleared=1

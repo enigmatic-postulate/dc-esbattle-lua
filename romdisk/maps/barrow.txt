@@ -1,0 +1,58 @@
+# barrow - the old barrow at night (slice 3D-6, GDD 12.5; docs/NEXT_SLICE_BARROW.md 7.2). The Bone Warden lies in the rune
+# ring before his crypt; the waystone (checkpoint C3) stands by the old path from the village.
+# Legend as romdisk/maps/village.txt: . grass  , flowers  = path  # fence (here: iron)  T tree (here: withered)
+# The graveyard set is procedural (tools/battle3d/make_props.py: crypt, tombs, waystone, dead_tree, iron_fence) until
+# the GDD's asset A1 arrives; the ground is painted (tools/ground/paint_ground.py: the barrow palette) and night-tinted.
+name barrow
+map 24 16
+TTTTTTTTTTTTTTTTTTTTTTTT
+T......,.....T.........T
+T......................T
+T.....................#T
+T.....................#T
+T.....................#T
+T....,.................T
+=================......T
+=================......T
+T......................T
+T.....................#T
+T....,................#T
+T......................T
+T......................T
+T.......,..............T
+TTTTTTTTTTTTTTTTTTTTTTTT
+spawn 1 7 right
+trees  dead_tree
+fences iron_fence
+light  night
+# the crypt north of the ring, tombstones around the ring and along the path
+prop crypt       19.0  3.5    0 solid 4 3
+prop tomb_round  11.5  4.5   10 solid 1 1
+prop tomb_cross  13.5  3.5  -15 solid 1 1
+prop tomb_round   6.5  4.5    5 solid 1 1
+prop tomb_cross   4.5 10.5   20 solid 1 1
+prop tomb_round   8.5 11.5  -10 solid 1 1
+prop tomb_round  12.5 10.5   25 solid 1 1
+prop tomb_cross  14.5 12.5  -20 solid 1 1
+prop tomb_round  15.5  4.5   15 solid 1 1
+prop tomb_cross  22.5  7.5  -80 solid 1 1
+prop tomb_round  21.5 11.5   70 solid 1 1
+prop tomb_cross  17.5 12.5   -5 solid 1 1
+prop tomb_round  19.5 10.5  -30 solid 1 1
+# the waystone (GDD App. A barrow_stone; decision BA1: an object that talks) and the Bone Warden, asleep in the ring
+# (`asleep`: no contact, no patrol; drawn lying until the intro raises him; his battle is the script's `battle warden boss`)
+entity waystone npc   stone  10 6 down talk barrow_stone
+entity warden   enemy warden 18 7 down warden asleep win warden_down
+# the ring: its intro once the waystone was used (stage 5), a nudge before (stage 4); the way back to the village
+# (closed once the Warden is down: the ending runs, BA3)
+trigger ring       15 5 7 6 warden_intro if stage >= 5 && !warden_down
+trigger ring_early 15 5 7 6 ring_nudge   if stage == 4
+exit    west        0 7 1 2 village 38 15 left if !warden_down
+glow    18.5 7.5 2.3 5A3CA8 ring
+glow    18.5 7.5 2.7 C080FF ring if stage == 5 && !warden_down
+glow    10.5 6.6 0.9 8A70F0 if stage == 4
+glow    18.5 7.5 1.1 D8C8FF if warden_down                # slice 3D-6: the soul wisp where he fell (A6 stand-in)
+shot    crypt        13.0 5.0 13.5   19.0 1.6 3.6   40
+shot    warden_rise  15.2 2.3 12.0   18.5 1.1 7.4   36
+shot    ring         13.5 6.5 14.5   18.0 0.6 7.5   38
+shot    barrow_dawn   8.5 6.5 15.5   16.0 0.8 6.5   44

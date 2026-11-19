@@ -12,6 +12,7 @@ Dump line formats (platform/host/host_engine.cpp):
   b MAT COUNT + COUNT lines 'v|e x y z u v ARGB'   (3D batch; e = end of strip)
   s SPRITE cx cy w h angle filter u0 v0 u1 v1 ARGB z   (z = 0: automatic order depth)
   r OP|TR x y w h ARGB z
+  fog RRGGBB start end   (slice 3D-6: PVR table fog on every 3D batch of the frame; MAT_MULTIPLY batches excepted)
 """
 import argparse
 import os
@@ -22,7 +23,9 @@ from PIL import Image
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'battle3d'))
 import raster  # noqa: E402
 
-MAT_TRANSLUCENT, MAT_BILINEAR, MAT_CULL, MAT_ADDITIVE = 1, 2, 4, 8
+FOG = None          # slice 3D-6: (rgb, start, end) of the frame being rendered
+
+MAT_TRANSLUCENT, MAT_BILINEAR, MAT_CULL, MAT_ADDITIVE, MAT_MULTIPLY, MAT_CULL_FRONT = 1, 2, 4, 8, 16, 32
 
 
 def load_texture(kind, args, dump_dir, romdisk):
@@ -50,6 +53,8 @@ def load_texture(kind, args, dump_dir, romdisk):
 def parse(path):
     tex, mats, batches, sprites, rects = {}, {}, [], [], []
     clear = 0
+    global FOG
+    FOG = None
     lines = open(path).read().split('\n')
     i = 0
     seq = 0
@@ -61,6 +66,8 @@ def parse(path):
             continue
         if p[0] == 'clear':
             clear = int(p[1], 16)
+        elif p[0] == 'fog':
+            FOG = (int(p[1], 16), float(p[2]), float(p[3]))
         elif p[0] == 'tex':
             tex[int(p[1])] = (p[2], p[3:])
         elif p[0] == 'mat':
@@ -119,11 +126,15 @@ def render(path, romdisk, scale=1):
         if not tris:
             continue
         t = textures[tid][0] if tid else None
-        if flags & (MAT_TRANSLUCENT | MAT_ADDITIVE):
+        if flags & (MAT_TRANSLUCENT | MAT_ADDITIVE | MAT_MULTIPLY):
+            mode = raster.MUL if flags & MAT_MULTIPLY else (raster.ADD if flags & MAT_ADDITIVE else raster.BLEND)
             for tri in tris:
-                tr.append((min(v[3] for v in tri), 'tri', (tri, t, bool(flags & MAT_BILINEAR), raster.ADD if flags & MAT_ADDITIVE else raster.BLEND, bool(flags & MAT_CULL))))
+                tr.append((min(v[3] for v in tri), 'tri', (tri, t, bool(flags & MAT_BILINEAR), mode, bool(flags & MAT_CULL))))
         else:
-            cv.tris(rv_of(tris), t, bool(flags & MAT_BILINEAR), raster.OP, bool(flags & MAT_CULL))
+            if FOG:
+                cv.fog(True, *FOG)
+            cv.tris(rv_of(tris), t, bool(flags & MAT_BILINEAR), raster.OP, 2 if flags & MAT_CULL_FRONT else bool(flags & MAT_CULL))
+            cv.fog(False)
 
     def sprite_quad(s):
         sid, (cx, cy, w, h, ang), filt, (u0, v0, u1, v1), argb, z = s
@@ -149,7 +160,10 @@ def render(path, romdisk, scale=1):
     for z, kind, pl in tr:
         if kind == 'tri':
             tri, t, bil, mode, cull = pl
+            if FOG and mode != raster.MUL:
+                cv.fog(True, *FOG)
             cv.tris(rv_of([tri]), t, bil, mode, cull)
+            cv.fog(False)
         elif kind == 'spr':
             t, _ = textures[pl[0]]
             cv.tris(rv_of(sprite_quad(pl)), t, pl[2] == 2, raster.BLEND, False)

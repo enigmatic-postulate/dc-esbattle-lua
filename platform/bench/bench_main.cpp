@@ -14,6 +14,7 @@ namespace eng {
 Sprite sprite_load(const char*, bool) { static int n = 0; return ++n; }
 void sprite_draw(Sprite, float, float, float, float, float, int) { g_calls = g_calls + 1; }
 void sprite_draw_uv(Sprite, float, float, float, float, float, float, float, float, float, int, uint32_t, float) { g_calls = g_calls + 1; }
+void sprite_reserve(Sprite, int, int) {}
 void gfx_rect(float, float, float, float, uint32_t, float) { g_calls = g_calls + 1; }
 void gfx_rect_tr(float, float, float, float, uint32_t, float) { g_calls = g_calls + 1; }
 bool input_down(Key k) { return (g_btn >> k) & 1; }
@@ -25,7 +26,11 @@ Material material_create(Sprite, int) { static int n = 0; return ++n; }
 alignas(32) static Vert3 g_vtx[16384];
 Vert3* vtx_begin(int max) { return max <= 16384 ? g_vtx : nullptr; }
 void vtx_end(Material, int used) { g_calls = g_calls + (uint32_t)used; }
+int vtx_room() { return 16384; }
 void set_clear_color(uint32_t) {}
+bool texture_update_vq(Sprite, const void*, int) { return true; }   // slice 3D-6 (the barrow's ground): a 130 KiB copy
+void set_fog(bool, uint32_t, float, float) {}                          // slice 3D-6: PVR registers
+void audio_event(const char*) {}
 bool file_exists(const char* path) {
     char p[512]; snprintf(p, sizeof p, "romdisk/%s", strncmp(path, "/rd/", 4) == 0 ? path + 4 : path);
     FILE* f = fopen(p, "rb"); if (!f) return false; fclose(f); return true;

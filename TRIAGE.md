@@ -234,3 +234,45 @@ Boot adds 17 `FOUND:` lines (`/rd/fonts/dialog.fnt`, `dialog.tex`, `/rd/scripts/
 | Characters: a gap at the neck, a floating head | head (VS1) and body (ours) skinned with different bind poses | `python3 tests/vs1art/check_chars.py` (same skeleton, posed heads compared); rebuild with `tools/vs1art/build_chars.sh` |
 | The skeletons' eyes dark instead of glowing cyan | the eye vertices are lit instead of taking their vertex colour | `models_glow_range()` finds them as the untextured batch's vertex range; both `field3d.cpp bake_look` and `battle3d_draw.cpp bake_slice` overwrite them unlit |
 | Frame rate below 60 near the road patrol or in its battle | the VS1 heads add ~550-980 vertices per character (the battle's overview of the road squad is the costliest frame, ~17.4k) | per model, `cp assets/vs1_art/bodies/<name>.dmf romdisk/models/` restores the pre-VS1 character exactly; `tools/vs1art/sweep_map.py` maps the field cost per tile |
+
+---
+
+# Slice 3D-6 (the title, the gate, the barrow, the ending): what to look at
+
+Nothing of this slice has run on hardware yet (docs/SLICE_BARROW.md §6). New boot lines (every build): `FOUND:`
+`/rd/maps/maps.txt`, `lights.txt`, `barrow.txt`, `barrow.gnd`, `/rd/scripts/barrow.txt`, `ending.txt`, `credits.txt`,
+`/rd/models/corwin.dmf`, `waystone.dmf`, `dead_tree.dmf`, `iron_fence.dmf`, `/rd/tex/logo.tex`, 6 new portraits;
+`game_boot: title`.
+
+| Symptom | Likely cause | Next step |
+|---|---|---|
+| "SCRIPT ERROR" at boot | a script, the map table or a map's links failed to compile (every file is compiled at boot) | the serial log's `script: <file> line N: ...`; `python3 tools/dialog/lint.py` says the same on the host |
+| The barrow is flat grey / no fog at all / fog in the village | the PVR's table fog (`pvr_fog_table_linear` maps W through the fog density register) differs from the host's linear emulation | `make clean && make NO_FOG=1`: the night reads without fog (tint + clear colour). Report what the fog looked like |
+| The barrow's ground garbled (blocks, stripes), the village's fine | the VQ slot reuse (`eng::texture_update_vq`) | `make clean && make GROUND_NO_VQ=1` (decoded at boot, plain RGB565, the same slot reuse) |
+| The death screen is black instead of grey-red | `MAT_MULTIPLY` (PVR_BLEND_DESTCOLOR / ZERO) | remove the multiply quad in `trans_draw_tint` (`src/transitions.cpp`): the overlay and the vignette remain |
+| A hitch when entering / leaving the barrow, at NEW GAME, on RETRY | the map load under the black: field + scene + re-bake of every character (~70 ms) + the ground upload | expected; it must stay under the fade (the screen is black for the last 2 ticks before the swap) |
+| A frame-rate dip during the dawn in the barrow | the light lerp: characters lit per frame, then re-baked 2 yaw buckets per tick | DIAG's worst CPU frame there; the lerp's 8-tick steps relight every prop colour set (the barrow's are small) |
+| Start does not skip | only `@script <name> skip` scripts skip (the intro, the boss intro, the ending), never on a choice, never during a transition; the credits skip with Start too | - |
+| The demo never starts / ends at once | 40 s (2,400 ticks) without any input on the title; any pad button ends it (a drifting stick counts as input only past 40) | `attract: N runs, T ticks` in the boot log; no `/rd/demo/attract.in` = no demo |
+| The demo goes off its path (walks into a wall, misses Wren) | the recorded inputs no longer match the game's logic (a map, script or rule change) | `tools/make_attract.sh` re-records it; `tests/barrow/run.sh` checks the replay |
+
+# Cel-shading test builds (`make CEL=1` / `make CEL=2`, docs/CEL_SHADING_STUDY.md)
+
+A feasibility prototype, not a feature: the default build never draws outlines. `CEL=1` outlines every character
+(decimated hull meshes `romdisk/models/hull/*.dmf`, 2 px) and bands the lighting; `CEL=2` outlines the hero only.
+Always `make clean` when switching (make does not track the flag).
+
+| Symptom | Cause / fix |
+|---|---|
+| Characters drawn solid black (or a black shell over them) | the hull's culling is the wrong way round on hardware: in `platform/kos/main.cpp` `material_create`, use `PVR_CULLING_CW` for `MAT_CULL_FRONT` |
+| No outlines at all | the hull files did not load: the serial log shows `/rd/models/hull/<name>.dmf` after each character; check they are on the romdisk (`make rm-elf && make`) |
+| Black blotches on faces / bodies | the coarse hull pokes through: raise `zpush` (0.05 -> 0.1) in `g_cel` (`src/render3d.cpp`) |
+| Missing scenery, `drops` > 0 in DIAG | the vertex arena is full: should not happen with the decimated hulls (host peak 19,047 / 20,480); report the scene |
+
+# The UI art pass (docs/UI_ART.md): what to look at
+
+| Symptom | Cause / fix |
+|---|---|
+| The HUD and battle text look like the old 5x7 pixel font | the atlas did not load: the serial log says `ui: /rd/ui/ui.uia missing or invalid`; rebuild the romdisk (`make rm-elf && make`) - the game keeps working on the old font (the fallback) |
+| Thin lines or specks at the edges of glyphs / icons | bilinear filtering reading a neighbour in the atlas: raise the gap in `pack()` of `tools/ui/make_ui_atlas.py` (2 px today) |
+| DIAG's heap line grows during the credits or a busy battle | a sprite queue grew: run the host with `--sprite-queues` on the same route; reserve the texture's queue in its init (`eng::sprite_reserve`) |

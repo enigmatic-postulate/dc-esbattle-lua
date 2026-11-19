@@ -8,6 +8,27 @@ namespace bt {
 static LoadedModel g_models[MAX_MODELS];
 static int g_nmodels = 0;
 
+// Cel-shading prototype (docs/CEL_SHADING_STUDY.md): a character's decimated outline hull, romdisk/models/hull/<name>.dmf
+// (tools/cel/hull_lab.py --write), loaded with the character when outlines are on. Never loaded otherwise.
+const int MAX_HULLS = 10;
+static dmf::Model g_hull_m[MAX_HULLS];
+static r3d::ModelGfx g_hull_g[MAX_HULLS];
+static int g_nhulls = 0;
+static void load_hull(LoadedModel& lm) {
+    static const char* const HAVE[] = { "knight", "wren", "brom", "corwin", "skel_warrior", "skel_rogue", "skel_mage" };
+    bool have = false;
+    for (const char* h : HAVE) have = have || !strcmp(h, lm.name);
+    if (!have || g_nhulls >= MAX_HULLS || r3d::cel().outline_px <= 0.0f) return;
+    char path[48];
+    snprintf(path, sizeof path, "/rd/models/hull/%s.dmf", lm.name);
+    eng::boot_log(path);
+    if (dmf::load(path, &g_hull_m[g_nhulls], false) && r3d::gfx_init(&g_hull_g[g_nhulls], g_hull_m[g_nhulls], false) &&
+        g_hull_m[g_nhulls].h->num_bones == lm.m.h->num_bones) {
+        lm.gfx.hull = &g_hull_g[g_nhulls];
+        ++g_nhulls;
+    }
+}
+
 int models_get(const char* name, bool upload_texture) {
     for (int i = 0; i < g_nmodels; ++i)
         if (strcmp(g_models[i].name, name) == 0) return g_models[i].ok ? i : -1;
@@ -18,6 +39,7 @@ int models_get(const char* name, bool upload_texture) {
     snprintf(path, sizeof path, "/rd/models/%s.dmf", name);
     eng::boot_log(path);
     lm.ok = dmf::load(path, &lm.m, upload_texture) && r3d::gfx_init(&lm.gfx, lm.m, false);
+    if (lm.ok && lm.m.h->num_bones) load_hull(lm);
     ++g_nmodels;
     return lm.ok ? g_nmodels - 1 : -1;
 }

@@ -14,14 +14,15 @@ per-yaw variants pre-rotated into the world, baked lighting in the normal bytes)
 | `village_map_vs1.txt` | `larp3-2/romdisk/maps/village.txt` | the layout and tiles of `romdisk/maps/village.txt` |
 | `models/hero.dmf`, `skeleton.dmf`, `mage.dmf` | `larp3-2/romdisk/models/` | the head parts of Rowan, the skeleton warrior, Wren (`tools/vs1art/import_chars.py`) |
 | `models/barbarian.dmf`, `skeleton_mage.dmf`, `skeleton_rogue.dmf` | **not in the upload**: built here with VS1's own converter (`tools/vs1art/vs1_fbx2dmf.py`, vendored) and VS1's recipe from the KayKit FBX | the head parts of Brom, the Bone Warden, the skull rogue |
-| `bodies/*.dmf` (6) | **ours**: the characters as shipped before this change (slices 3D-2 to 3D-5; `tools/battle3d/build_assets.sh` and `tools/dialog/build_assets.sh` rebuild Wren's, Brom's and the Rogue's here) | the bodies, skeletons, rest poses and embedded clips of the shipped characters |
+| `models/ranger.dmf` | **not in the upload** (slice 3D-6): VS1's converter and the Mage's recipe on the KayKit Ranger (CC0) | the head part of Corwin |
+| `bodies/*.dmf` (7) | **ours**: the characters as shipped before this change (slices 3D-2 to 3D-5; `tools/battle3d/build_assets.sh` and `tools/dialog/build_assets.sh` rebuild Wren's, Brom's, Corwin's and the Rogue's here) | the bodies, skeletons, rest poses and embedded clips of the shipped characters (slice 3D-6 added Corwin's: the Ranger at 1,000 triangles) |
 
 Rebuild everything derived from this folder:
 
 ```
 python3 tools/vs1art/import_props.py          # textures + props -> romdisk/ (byte-identical: --check)
-tools/vs1art/build_chars.sh                   # the 6 characters -> romdisk/models/ (byte-identical)
-VS1PY=<py3.12 + tools/vs1art/requirements-vs1.txt> KAYKIT=../KayKit tools/vs1art/build_chars.sh   # + the 3 VS1-recipe heads
+tools/vs1art/build_chars.sh                   # the 7 characters -> romdisk/models/ (byte-identical)
+VS1PY=<py3.12 + tools/vs1art/requirements-vs1.txt> KAYKIT=../KayKit tools/vs1art/build_chars.sh   # + the 4 VS1-recipe heads
 ```
 
 `tests/vs1art/run.sh` checks all of it (with `VS1PY=` also that the vendored converter reproduces VS1's uploaded

@@ -1,0 +1,30 @@
+# Order variation (docs/NEXT_SLICE_BARROW.md 11 T2): into the barrow and back out by its west exit (BA3: no dead end),
+# a rest at Brom's, Corwin after the gate opened, back in, then the waystone, the Warden and the ending. Ends in the same
+# final state as full.route.
+expect mode=title
+newgame
+until field
+choose 0
+talk wren
+chase slime_a
+chase slime_b
+talk wren
+talk brom
+talk corwin
+expect gate_open=1 stage=4
+exit east
+expect map=barrow pos=2,7
+exit west
+expect map=village pos=37,15 stage=4
+choose 0
+talk brom
+expect cp=9 potions=3 hp=30
+talk corwin
+expect gate_open=1 stage=4
+exit east
+expect map=barrow
+talk waystone
+expect stage=5 cp=3
+goto 16 7
+until title
+expect mode=title cleared=1 stage=7 warden_down=1

@@ -9,17 +9,23 @@
 
 namespace bt {
 
+// Slice 3D-6: several maps (romdisk/maps/maps.txt: the index is the map id). Per-map entity and trigger bits.
+const int MAX_MAPS = 4;
+
 struct Progress {                 // GDD 10.1; copied whole by checkpoints
-    uint8_t  stage;               // 0..7 (this slice: 0, 1, 2, 3, 6); only moves forward
+    uint8_t  stage;               // 0..7 (GDD App. B: S0..S7); only moves forward
     uint8_t  potions;             // 0..3
     uint8_t  max_hp;              // 20, 30
     uint8_t  objective;           // objective id (script objective table; 0 = none)
     uint32_t flags;               // bit i = flag i of @flags (max 32)
-    uint16_t defeated;            // bit i = map entity i beaten (field_defeat)
+    uint16_t defeated[MAX_MAPS];  // per map: bit i = that map's entity i beaten (field_defeat)
+    uint16_t trig[MAX_MAPS];      // per map: bit i = that map's `once` trigger i has fired (slice 3D-6)
+    uint8_t  map;                 // the map the hero is on (slice 3D-6; a checkpoint's copy = the checkpoint's map)
     uint8_t  cp_x, cp_y, cp_dir;  // hero tile and facing when the checkpoint was taken
-    uint8_t  cp_id;               // 0 = C0 (new game), 1 = C1, 2 = C2, 9 = Brom's rest (traces)
+    uint8_t  cp_id;               // 0 = C0 (new game), 1 = C1, 2 = C2, 3 = C3 (the waystone), 9 = Brom's rest (traces)
 };
 static_assert(sizeof(Progress) <= 64, "GDD 10.1: Progress must stay under 64 bytes");
+static_assert(sizeof(Progress) == 32, "tests/dialog/check_checkpoints.py reads the raw bytes at fixed offsets");
 
 const int MAX_FLAGS = 32;
 const int MAX_POTIONS = 3;
@@ -27,7 +33,7 @@ const int START_MAX_HP = 20;
 
 // The flags the code itself reads (looked up by name in the script's @flags at boot; -1 = absent:
 // a map without a quest script, e.g. test_field, has every skill learned and nothing to set).
-struct QuestFlags { int patrol_a, patrol_b, skill_fire, has_token, warden_down; };
+struct QuestFlags { int patrol_a, patrol_b, skill_fire, has_token, warden_down, gate_open, warden_seen; };
 
 Progress&       progress();                          // the live state
 const Progress& progress_checkpoint();               // the last checkpoint's copy
@@ -37,7 +43,7 @@ int  progress_flag_index(const char* name);          // -1 if not declared
 const char* progress_flag_name(int i);
 int  progress_flag_count();
 
-void progress_new_game(int spawn_x, int spawn_y, int spawn_dir, int objective);
+void progress_new_game(int spawn_x, int spawn_y, int spawn_dir, int objective, int map = 0);
 void checkpoint_save(int cp_id, int tile_x, int tile_y, int dir);
 void checkpoint_restore();                           // progress() = the checkpoint's copy
 

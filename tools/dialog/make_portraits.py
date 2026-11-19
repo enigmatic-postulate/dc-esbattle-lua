@@ -38,6 +38,9 @@ CHARS = {
     'rowan': ('knight_hi.dmf',    (52, 88, 146), (10, 18, 38),  (120, 160, 220), 0.0, 0.50, 3.9),
     'wren':  ('mage_hi.dmf',      (96, 58, 142), (24, 14, 46),  (190, 140, 240), 0.0, 0.62, 4.3),
     'brom':  ('barbarian_hi.dmf', (150, 80, 38), (36, 18, 10),  (240, 170, 110), 0.0, 0.52, 4.0),
+    # slice 3D-6: Corwin (the Ranger, his teal cloak) and the Bone Warden (the Skeleton Mage, the barrow's purple)
+    'corwin': ('ranger_hi.dmf',   (40, 110, 120), (10, 28, 34), (140, 220, 210), 0.0, 0.52, 4.0),
+    'warden': ('skeleton_mage_hi.dmf', (84, 48, 128), (14, 8, 28), (190, 130, 255), 0.0, 0.70, 4.4),
 }
 KEY = (np.array([-0.55, 0.55, 0.63]), np.array([1.00, 0.94, 0.84]), 0.62)   # direction (toward the light), colour, strength
 FILL = (np.array([0.80, 0.15, 0.55]), np.array([0.70, 0.80, 1.00]), 0.22)

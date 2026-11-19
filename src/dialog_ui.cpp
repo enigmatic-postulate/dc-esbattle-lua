@@ -152,6 +152,7 @@ static void typewriter(bool fast) {
     for (int k = 0; k < n && g_d.shown < g_d.total; ++k) {
         const char c = visible_char(text, g_d.shown);
         ++g_d.shown;
+        if (g_d.shown % 3 == 1) eng::audio_event("text_blip");      // slice 3D-6: audio hooks (S12)
         if (g_d.shown >= g_d.total) break;                          // no pause at the end of a page
         const char nx = visible_char(text, g_d.shown);
         if (stop_char(c) && !stop_char(nx)) { g_d.pause = fast ? (DLG_PAUSE_STOP + DLG_FAST - 1) / DLG_FAST : DLG_PAUSE_STOP; break; }

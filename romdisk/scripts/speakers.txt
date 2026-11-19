@@ -4,3 +4,5 @@
 @speaker rowan "Rowan" 3A6EA8 rowan
 @speaker wren  "Wren"  6038A0 wren
 @speaker brom  "Brom"  A0502A brom
+@speaker corwin "Corwin" 2A7A8C corwin
+@speaker warden "The Warden" 7A48B0 warden

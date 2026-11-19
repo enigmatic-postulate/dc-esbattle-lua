@@ -13,6 +13,7 @@ static void burn_on_turn_start(BattleCtx& ctx, Actor& a, StatusInst& st) {
     if (a.hp <= 0) return;
     int dmg = st.dot;
     apply_damage(&a, dmg);
+    if (a.team == Team::Enemy) ctx.tally.dmg_dealt += dmg; else ctx.tally.dmg_taken += dmg;   // slice 3D-6: results card
     BattleEvent ev;                                  // presentation only (slice 3D-4): the burn sequence
     ev.kind = EvKind::BurnTick; ev.user = &a; ev.skill = -1; ev.result = ResultKind::Noop; ev.dmg = dmg;
     ctx.events.push(ev);

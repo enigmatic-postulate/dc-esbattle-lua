@@ -23,6 +23,9 @@ if [ -n "${VS1PY:-}" ]; then
       --native-anim "$AN/Rig_Medium_Special.fbx:Skeletons_Idle:idle:15" --unlit Glow=78FFE6 --max-error 0.025 -o "$A/skeleton_mage.dmf" > /dev/null
   "$VS1PY" tools/vs1art/vs1_fbx2dmf.py --model "$KK/Characters/Skeleton_Rogue.fbx" --texture "$KK/Characters/skeleton_texture.png" \
       --native-anim "$AN/Rig_Medium_Special.fbx:Skeletons_Idle:idle:15" --unlit Glow=78FFE6 --max-error 0.025 -o "$A/skeleton_rogue.dmf" > /dev/null
+  # slice 3D-6: the Ranger (Corwin), the Mage's recipe: the body at 0.02, the face at 0.005
+  "$VS1PY" tools/vs1art/vs1_fbx2dmf.py --model "$KK/Characters/Ranger.fbx" --texture "$KK/Characters/ranger_texture.png" \
+      --native-anim "$AN/Rig_Medium_General.fbx:Idle_A:idle:15" --max-error 0.02 --part-error Ranger_Head=0.005 -o "$A/ranger.dmf" > /dev/null
   A=assets/vs1_art/models
 fi
 B=assets/vs1_art/bodies
@@ -34,3 +37,4 @@ py skeleton_mage  "$M/skel_mage.dmf"    --body "$B/skel_mage.dmf"      # the Bon
 py skeleton_rogue "$M/skel_rogue.dmf"   --body "$B/skel_rogue.dmf"     # the battle's skull rogue
 py mage           "$M/wren.dmf"         --body "$B/wren.dmf"           # Wren: VS1's hat and face
 py barbarian      "$M/brom.dmf"         --body "$B/brom.dmf"           # Brom: the bear hood and face
+py ranger         "$M/corwin.dmf"       --body "$B/corwin.dmf"         # Corwin (slice 3D-6): the Ranger's hair and face

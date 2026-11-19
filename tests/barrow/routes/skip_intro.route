@@ -1,0 +1,6 @@
+# Skip (docs/NEXT_SLICE_BARROW.md 11 T6): Start during the intro fast-forwards it to its end; compare with intro_watched.route.
+expect mode=title
+newgame
+skip
+until field
+expect stage=0 objective=Speak_with_Wren pos=3,15

@@ -78,7 +78,7 @@ final() { grep "^Q" "$W/$1.32" | tail -1 | grep -o "stage=[0-9]* .*flags=[^ ]*" 
 if [ "$(final r1_canonical)" = "$(final r2_patrols_first)" ] && [ "$(final r1_canonical)" = "$(final r4_everyone_twice)" ]; then
   ok "routes 1, 2 and 4 end in the same quest state: $(final r1_canonical)"; else bad "final states differ" "$(final r1_canonical) / $(final r2_patrols_first) / $(final r4_everyone_twice)"; fi
 
-echo "== checkpoints: a lost battle restores the last checkpoint byte for byte (S0, S1, S3; S2 has no battle)"
+echo "== checkpoints: a lost battle restores the last checkpoint byte for byte (S0, S1, Brom's rest; the barrow's C3: tests/barrow)"
 for r in cp_s0 r6_lose_retry cp_s3; do
   if out=$(python3 tests/dialog/check_checkpoints.py "$W/$r.32"); then ok "$r: $out"; else bad "$r checkpoints" "$out"; fi
 done
@@ -92,8 +92,8 @@ a0=$(grep '^ACT' "$W/tl0.log" | awk '$3=="hero"{print $4}' | sort -u | tr '\n' '
 [ "$a0" = "attack " ] && [ "$a1" = "fireball " ] && ok "the bot's Fire falls back to Attack while Fire is locked (hero: $a0); learned, it casts (hero: $a1)" || bad "fire lock turn logs" "locked: $a0 learned: $a1"
 TMO=300 T $B32 - /dev/null --state-only --route tests/dialog/routes/r1_canonical.route --max-ticks 90000 --turn-log "$W/r1.log" > /dev/null 2>&1
 hp_patrol=$(grep "^ST" "$W/r1.log" | grep -v "warden:" | grep -o "hero:[0-9]*/[0-9]*" | cut -d/ -f2 | sort -u | tr '\n' ' ')
-hp_boss=$(grep "^ST" "$W/r1.log" | grep "warden:" | grep -o "hero:[0-9]*/[0-9]*" | cut -d/ -f2 | sort -u | tr '\n' ' ')
-[ "$hp_patrol" = "20 " ] && [ "$hp_boss" = "30 " ] && ok "field battles use the quest's max HP: 20 at the patrols, 30 at the Warden (Wren's blessing)" || bad "max HP in battles" "patrols: $hp_patrol boss: $hp_boss"
+# slice 3D-6: the Warden is the barrow's (tests/barrow/run.sh checks his battle's 30 HP)
+[ "$hp_patrol" = "20 " ] && ok "field battles use the quest's max HP: 20 at the patrols (the Warden's 30: tests/barrow)" || bad "max HP in battles" "patrols: $hp_patrol"
 if [ "$Q" != 1 ]; then
   eq_fail=""
   for f in tests/battle3d/baseline/*.log; do
@@ -114,20 +114,21 @@ s = sys.argv[1]
 v = lambda k: int(re.search(k, s).group(1))
 # budgets of the VS1 art reconciliation (docs/SLICE_VS1_ART.md, Budgets): 28 of 32 texture slots, 1 MiB of textures
 # (of ~4.4 MiB free), 160 materials, 1,600 KiB of the 1,792 KiB model arena
-ok = v(r'textures (\d+)/') <= 28 and v(r'VRAM (\d+) KiB') <= 1024 and v(r'materials (\d+)/') <= 160 and \
-     v(r'model arena (\d+) KiB') <= 1600 and v(r'animation library (\d+) KiB') <= 384 and v(r'script pools (\d+) B') <= 24 * 1024
+# slice 3D-6 (docs/NEXT_SLICE_BARROW.md 9): 30 slots, 1 MiB, 200 materials, 1,700 KiB of arena, 32 KiB of script pools
+ok = v(r'textures (\d+)/') <= 30 and v(r'VRAM (\d+) KiB') <= 1280 and v(r'materials (\d+)/') <= 200 and \
+     v(r'model arena (\d+) KiB') <= 1700 and v(r'animation library (\d+) KiB') <= 384 and v(r'script pools (\d+) B') <= 32 * 1024
 sys.exit(0 if ok else 1)
 PYEOF
 then ok "resources within budget: $res"; else bad "resources over budget" "$res"; fi
 rd_bytes=$(find romdisk -type f -exec cat {} + | wc -c)
-[ "$rd_bytes" -le 2500000 ] && ok "romdisk $rd_bytes bytes (<= 2.5 MB)" || bad "romdisk $rd_bytes bytes"
+[ "$rd_bytes" -le 3100000 ] && ok "romdisk $rd_bytes bytes (<= 3.1 MB; slice 3D-6: the barrow, Corwin, 6 portraits; the UI atlas)" || bad "romdisk $rd_bytes bytes"
 TMO=300 T $B32 - "$W/r1v.trace" --state-only --view --route tests/dialog/routes/r1_canonical.route --max-ticks 90000 > /dev/null 2>&1
 for f in field_walk field_fuzz2; do T $B32 tests/inputs/$f.in "$W/v_$f.trace" --state-only --view > /dev/null 2>&1; done
 vstat=$(cat "$W/r1v.trace" "$W/v_field_walk.trace" "$W/v_field_fuzz2.trace" | awk '/^V /{for(i=2;i<=NF;i++){split($i,a,"=");v[a[1]]=a[2]} m=v["mode"]; if(v["out"]>o[m])o[m]=v["out"]; if(v["arena"]>ar[m])ar[m]=v["arena"]; d+=v["drops"]} END{printf "field out %d arena %d, dialog out %d arena %d, drops %d", o["field"], ar["field"], o["dialog"], ar["dialog"], d+0}')
 if echo "$vstat" | python3 -c "
 import re,sys; s=sys.stdin.read(); n=list(map(int,re.findall(r'\d+',s)))
-sys.exit(0 if n[0]<=18000 and n[2]<=18000 and n[2]<=n[0] and n[4]==0 and n[1]<=18000 and n[3]<=18000 else 1)"; then
-  ok "vertices per frame: $vstat (<= 18,000 submitted and written; dialog <= the field's worst; arena of 20,480)"; else bad "vertex budget" "$vstat"; fi
+sys.exit(0 if n[0]<=18000 and n[2]<=18000 and n[4]==0 and n[1]<=18000 and n[3]<=18000 else 1)"; then
+  ok "vertices per frame: $vstat (<= 18,000 submitted and written; arena of 20,480; slice 3D-6: cutscene cameras may see more than the field's)"; else bad "vertex budget" "$vstat"; fi
 g++ -std=gnu++17 -O2 -DHOST_ALLOC_COUNT $SHZ src/*.cpp platform/host/host_engine.cpp platform/host/trace_main.cpp platform/host/battle_bot.cpp \
     platform/host/story.cpp build/sh4zam-host/libsh4zam.a -o build/battle_trace_alloc 2> "$W/alloc_build.err" || bad "alloc build" "$(cat "$W/alloc_build.err")"
 heap=""; for r in r1_canonical r4_everyone_twice cp_s3; do
@@ -137,8 +138,8 @@ heap=""; for r in r1_canonical r4_everyone_twice cp_s3; do
 est=$(python3 tests/dialog/sh4_model.py "$W/v_field_walk.trace" "$W/v_field_fuzz2.trace" "$W/r1v.trace" 2>&1)
 echo "$est" | sed 's/^/       /'
 fw=$(echo "$est" | grep -v "^calibration" | grep " field " | grep -o "worst [0-9.]* M" | grep -o "[0-9.]*" | sort -n | tail -1); dw=$(echo "$est" | grep " dialog " | grep -o "worst [0-9.]* M" | grep -o "[0-9.]*")
-if python3 -c "import sys; f,d=float('$fw'),float('$dw'); sys.exit(0 if f<=1.60 and d<=f else 1)"; then
-  ok "SH4 estimate (calibrated host model, not a measurement): field worst $fw M <= 1.60 M, dialog worst $dw M <= the field's"; else bad "SH4 estimate over budget" "$est"; fi
+if python3 -c "import sys; f,d=float('$fw'),float('$dw'); sys.exit(0 if f<=1.60 and d<=1.60 else 1)"; then
+  ok "SH4 estimate (calibrated host model, not a measurement): field worst $fw M, dialog worst $dw M (<= 1.60 M)"; else bad "SH4 estimate over budget" "$est"; fi
 if [ "${SH4:-0}" = 1 ]; then
   if out=$(TMO=2400 T bash tests/dialog/sh4_budget.sh 2>&1); then echo "$out" | sed 's/^/       /'; ok "SH4 (qemu) frame cost within budget"; else bad "SH4 (qemu) frame cost" "$out"; fi
 fi

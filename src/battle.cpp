@@ -33,6 +33,9 @@ static const int T_ANIMATE_MIN = 12;   // 0.20 s
 static const int T_RESULT_HOLD = 30;   // banner shown this long before A is accepted
 
 BattleCtx& battle_ctx() { return g_ctx; }
+static bool g_auto_lose = false, g_auto_win = false;
+void battle_set_auto(bool auto_lose, bool auto_win) { g_auto_lose = auto_lose; g_auto_win = auto_win; }
+const BattleTally& battle_tally() { return g_ctx.tally; }
 
 const char* battle_state_name(BattleState s) {
     switch (s) {
@@ -76,6 +79,8 @@ void battle_begin(const EncounterDef& enc, const PartyState& party) {
     ctx.result_ticks = 0;
     ctx.outcome = BattleOutcome::None;
     ctx.events.clear();
+    ctx.auto_lose = g_auto_lose; ctx.auto_win = g_auto_win;
+    ctx.tally = BattleTally();
     if (g_view == BattleView::Models3D) battle3d_begin(ctx, enc);
 }
 
@@ -151,6 +156,21 @@ void battle_update() {
 
         SkillResult result;
         if (sk.resolve) result = sk.resolve(ctx, *ctx.active, ctx.pending.targets);
+        {   // slice 3D-6: audio hooks (S12) and the results card's counts
+            static const char* const SOUND[] = { "swing", "fireball", "shield", "potion" };
+            const int si = skill_index(&sk);
+            if (result.ok) eng::audio_event(si >= 0 && si < 4 ? SOUND[si] : "boss_skill");
+            if (result.ok && (result.kind == ResultKind::Single || result.kind == ResultKind::Aoe)) eng::audio_event("hit");
+            const bool hero = ctx.active->team == Team::Player;
+            if (hero) { ++ctx.tally.hero_turns; if (result.ok && skill_index(&sk) == SK_POTION) ++ctx.tally.potions_used; }
+            auto count = [&](const Actor* t, int d) {
+                if (!t || d <= 0) return;
+                if (t->team == Team::Enemy && hero) ctx.tally.dmg_dealt += d;
+                if (t->team == Team::Player && !hero) ctx.tally.dmg_taken += d;
+            };
+            if (result.ok && result.kind == ResultKind::Single) count(result.target, result.dmg);
+            else if (result.ok && result.kind == ResultKind::Aoe) for (const Hit& h : result.hits) count(h.target, h.dmg);
+        }
         if (sk.present) sk.present(ctx, *ctx.active, result, ctx.pending.targets);
         {   // presentation event (read by the 3D view only)
             BattleEvent ev;
@@ -189,6 +209,11 @@ void battle_update() {
         // Result banner; A (after a short hold) confirms and hands control back to the game.
         if (busy) break;                                    // gate: the killing blow's sequence
         ctx.result_ticks = ctx.result_ticks + 1;
+        if (ctx.outcome == BattleOutcome::None && ctx.state == BattleState::Lose && ctx.auto_lose) { ctx.outcome = BattleOutcome::Lost; break; }
+        if (ctx.outcome == BattleOutcome::None && ctx.state == BattleState::Win && ctx.auto_win) {
+            if (ctx.result_ticks >= BOSS_WIN_HOLD) ctx.outcome = BattleOutcome::Won;
+            break;
+        }
         if (ctx.outcome == BattleOutcome::None && ctx.result_ticks >= T_RESULT_HOLD && input_pressed(eng::KEY_FIRE))
             ctx.outcome = (ctx.state == BattleState::Win) ? BattleOutcome::Won : BattleOutcome::Lost;
         break;
@@ -205,7 +230,7 @@ static void draw_result_banner(const BattleCtx& ctx) {
     const bool won = ctx.state == BattleState::Win;
     eng::gfx_rect_tr(0, 196, 640, 96, 0xC0000000, 8.0f);
     font_draw_centered(320, 210, won ? "VICTORY!" : "DEFEAT...", 4, won ? 0xFFFFCD75 : 0xFFEF7D57, true, 8.5f);
-    if (ctx.result_ticks >= T_RESULT_HOLD && (ctx.result_ticks / 20) % 2 == 0)
+    if (ctx.result_ticks >= T_RESULT_HOLD && (ctx.result_ticks / 20) % 2 == 0 && !(won && ctx.auto_win))
         font_draw_centered(320, 256, "PRESS A", 2, 0xFFF4F4F4, true, 8.5f);
 }
 
@@ -231,7 +256,7 @@ void battle_draw() {
     pres_draw(ctx);        // flash markers before fx
     ui_draw(ctx);          // menus/cursor
     fx_draw(ctx);          // floating numbers always last
-    if (ctx.state == BattleState::Win || ctx.state == BattleState::Lose) draw_result_banner(ctx);
+    if (ctx.state == BattleState::Win || (ctx.state == BattleState::Lose && !ctx.auto_lose)) draw_result_banner(ctx);
 }
 
 } // namespace bt

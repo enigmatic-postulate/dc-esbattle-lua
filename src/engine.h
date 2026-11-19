@@ -23,6 +23,11 @@ void   sprite_draw(Sprite s, float cx, float cy, float w, float h, float angle, 
 void   sprite_draw_uv(Sprite s, float cx, float cy, float w, float h, float angle,
                       float u0, float v0, float u1, float v1, int filter = 0,
                       uint32_t argb = 0xFFFFFFFFu, float z = 0.0f);
+// The per-frame sprite queues of texture s (nearest / bilinear) hold at least that many draws without growing (KOS:
+// std::vector capacity, reserved at boot - a texture drawn with many sprites per frame, e.g. a font atlas, must never
+// allocate after the boot; the default is 640 nearest / 64 bilinear for an alpha texture). A no-op where queues do not
+// exist (the host harness; tools/ui/sprite_cost.py measures the per-texture peaks there).
+void   sprite_reserve(Sprite s, int nearest, int bilinear);
 
 void gfx_rect(float x, float y, float w, float h, uint32_t argb, float z = 1.0f);
 void gfx_rect_tr(float x, float y, float w, float h, uint32_t argb, float z = 0.1f);
@@ -49,6 +54,10 @@ enum MaterialFlags {
     MAT_BILINEAR    = 2,   // else nearest
     MAT_CULL        = 4,   // cull back faces (front = counter-clockwise on screen; see render3d.cpp)
     MAT_ADDITIVE    = 8,   // TR list, additive blending: dst + src * src_alpha (glows, sparks, fire)
+    MAT_MULTIPLY    = 16,  // TR list, multiplicative blending: dst * src colour (slice 3D-6: the death screen's
+                           // grey-red tint over the whole frame; never fogged)
+    MAT_CULL_FRONT  = 32,  // cull FRONT faces (keep the back faces): the inverted-hull outline of the cel-shading
+                           // feasibility prototype (docs/CEL_SHADING_STUDY.md); KOS PVR_CULLING_CCW
 };
 // texture: a Sprite handle (PNG or memory texture) or 0 for untextured (vertex colour only).
 Material material_create(Sprite texture, int flags);
@@ -93,16 +102,34 @@ inline void vq_decode(const uint8_t* data, int w, int h, uint16_t* out) {
         }
 }
 
+// Slice 3D-6: replaces the data of a VQ texture made by texture_create_vq (same size: the barrow's painted ground
+// reuses the village's slot, docs/NEXT_SLICE_BARROW.md D5). Same rule as texture_update: the caller must not have
+// drawn `s` in the last 2 frames (a map change happens under a full fade). false if `s` is not a VQ texture of
+// that size. GROUND_NO_VQ builds decode into the slot's plain RGB565 texture.
+bool texture_update_vq(Sprite s, const void* data, int bytes);
+
+// Slice 3D-6: PVR table fog for every 3D batch (materials; sprites and rects are never fogged). on = false turns
+// it off. rgb: the fog colour; start/end: linear fog between these view depths (world units, W = the depth
+// render3d divides by; vertex z = 1/W). KOS: pvr_fog_table_color + pvr_fog_table_linear and each material's
+// fogged header; make NO_FOG=1 ignores it (TRIAGE). Host: recorded in the frame dumps (tools/render_frame.py).
+void set_fog(bool on, uint32_t rgb, float start, float end);
+
 // Per-frame vertex arena. vtx_begin() reserves up to `max` vertices (nullptr if the frame's
 // arena is full: the caller skips the draw); vtx_end() commits the first `used` of them as one
 // batch drawn with `m`. One batch may be open at a time. The arena resets every frame.
 Vert3* vtx_begin(int max);
 void   vtx_end(Material m, int used);
+// Slice 3D-6: vertices still free in this frame's arena (a caller with a pessimistic bound reserves at most this much).
+int    vtx_room();
 
 // Background colour behind everything (0xRRGGBB).
 void set_clear_color(uint32_t rgb);
 
 float random01();
+// Slice 3D-6 (GDD 16.3 R1/R2, docs/NEXT_SLICE_BARROW.md 5.11): a named audio moment - a text blip, a menu move, a
+// swing, the boss theme... The game has no audio path yet: the KOS backend ignores it, the host writes an `A` line
+// to the trace, so the future audio track attaches here without touching game code.
+void audio_event(const char* name);
 void  dbg_print(const char* s);
 // Boot/progress breadcrumb: always on in the Dreamcast build (serial log, flushed at once,
 // with a millisecond timestamp), silent on the host. A log that stops after a breadcrumb

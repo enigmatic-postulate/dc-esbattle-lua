@@ -1,0 +1,25 @@
+# Triggers and exits (docs/NEXT_SLICE_BARROW.md 11 T5): before the token the road block walks the hero back one tile (from
+# where his feet touched the trigger: the tile before it, 37 -> 36),
+# every time; the east exit is closed (its tiles block); Corwin's talk opens it (S4) and the exit takes the hero to the
+# barrow; the barrow's exit brings him back.
+expect stage=0 walkable:39,15=0 walkable:39,16=0
+goto 36 15
+goto 38 15
+expect pos=36,15 gate_open=0 mode=field
+goto 36 16
+goto 38 16
+expect pos=36,16 gate_open=0
+choose 0
+talk wren
+chase slime_a
+chase slime_b
+talk wren
+expect stage=3 walkable:39,15=0
+goto 38 15
+expect pos=36,15
+talk corwin
+expect gate_open=1 stage=4 walkable:39,15=1 walkable:39,16=1
+exit east
+expect map=barrow pos=2,7 stage=4
+exit west
+expect map=village pos=37,15
