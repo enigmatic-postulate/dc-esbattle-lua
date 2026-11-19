@@ -22,6 +22,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include <vector>
 
 #include "../../src/engine.h"
@@ -54,7 +55,7 @@ static int g_diag_frame = 0;
 // Always-on boot breadcrumbs (every build): the same synchronous dbgio path as the FOUND:/
 // MISSING: lines, flushed per line, with milliseconds since boot. Boot prints ~30 lines, the
 // first two frames ~6 each, then one line at frames 60 and 600; nothing after that.
-static uint64 g_boot_ms0 = 0;
+static uint64_t g_boot_ms0 = 0;
 #define BOOT(...) do { dbgio_printf("[boot %5lu ms] ", (unsigned long)(timer_ms_gettime64() - g_boot_ms0)); \
                        dbgio_printf(__VA_ARGS__); dbgio_flush(); } while (0)
 #define BOOT_F(...) do { if (g_diag_frame <= 2) BOOT(__VA_ARGS__); } while (0)
@@ -111,11 +112,11 @@ static void flush_3d(pvr_list_t list) {
 
 static Sprite g_sprites[eng::MAX_SPRITES];
 static int g_sprite_count = 0;
-static uint32 g_vram_bytes = 0;
+static uint32_t g_vram_bytes = 0;
 
 // --- Sprite batching by texture + filter -------------------------------------
 enum SpriteFilterMode : int { SF_NEAREST = 0, SF_BILINEAR = 1 };
-struct SpriteCmd { float cx, cy, w, h, a, u0, v0, u1, v1, z; uint32 argb; };
+struct SpriteCmd { float cx, cy, w, h, a, u0, v0, u1, v1, z; uint32_t argb; };
 
 static std::vector<SpriteCmd> g_q_nearest[eng::MAX_SPRITES];
 static std::vector<SpriteCmd> g_q_bilinear[eng::MAX_SPRITES];
@@ -129,11 +130,11 @@ static void reserve_queues(int slot, bool alpha) {
 }
 static int g_seq = 0;              // sprite draw calls this frame (auto depth)
 
-struct RectCmd { int list; float x, y, w, h; float z; uint32 argb; };
+struct RectCmd { int list; float x, y, w, h; float z; uint32_t argb; };
 static RectCmd g_rect_q[2048];
 static int g_rect_qn = 0;
 
-static inline void rectq_push(int list, float x, float y, float w, float h, float z, uint32 argb) {
+static inline void rectq_push(int list, float x, float y, float w, float h, float z, uint32_t argb) {
     if (g_rect_qn >= (int)(sizeof(g_rect_q) / sizeof(g_rect_q[0]))) return;
     g_rect_q[g_rect_qn++] = { list, x, y, w, h, z, argb };
 }
@@ -171,7 +172,7 @@ static void flush_sprite_batches(bool alpha) {
 }
 
 // --- Input -----------------------------------------------------------------
-struct InputState { uint32 buttons; int joyx; int joyy; };   // joyx/joyy: -128..127, + = right/down
+struct InputState { uint32_t buttons; int joyx; int joyy; };   // joyx/joyy: -128..127, + = right/down
 static InputState g_in = { 0, 0, 0 };   // KOS cont_state_t.buttons is active-high (1 = pressed)
 
 static void poll_input() {
@@ -186,7 +187,7 @@ static void poll_input() {
 
 // KOS's controller driver already inverts the raw active-low bits (cont_reply: buttons = ~raw),
 // so 1 = pressed. The original main.cpp tested == 0, so every button read as held at rest.
-static bool down_mask(uint32 mask) { return (g_in.buttons & mask) != 0; }
+static bool down_mask(uint32_t mask) { return (g_in.buttons & mask) != 0; }
 
 // --- Rect flush ----------------------------------------------------------
 static pvr_poly_hdr_t g_rect_hdr_op, g_rect_hdr_tr;
@@ -347,7 +348,7 @@ Sprite texture_create_vq(const void* data, int bytes, int w, int h) {
     s->tex = pvr_mem_malloc((size_t)bytes);
     if (!s->tex) { BOOT("pvr_mem_malloc failed (texture_create_vq)\n"); return 0; }
     pvr_txr_load((void*)data, s->tex, (size_t)bytes);
-    g_vram_bytes += (uint32)bytes;
+    g_vram_bytes += (uint32_t)bytes;
     pvr_poly_cxt_t cxt;
     pvr_poly_cxt_txr(&cxt, PVR_LIST_OP_POLY, s->pvr_fmt | (int)PVR_TXRFMT_TWIDDLED, w, h, s->tex, PVR_FILTER_NONE);
     pvr_poly_compile(&s->hdr_nearest, &cxt);
@@ -630,18 +631,18 @@ int main(int, char**) {
 
     // Fixed 60 Hz timestep (slice task A5): accumulate elapsed microseconds x60 and run one
     // game tick per 1,000,000 (exact, no drift). At most 4 catch-up ticks per displayed frame.
-    uint64 last = timer_us_gettime64();
-    uint64 acc60 = 0;
-    uint32 worst_us = 0, over_budget = 0;          // frame-time probe (DIAG report)
+    uint64_t last = timer_us_gettime64();
+    uint64_t acc60 = 0;
+    uint32_t worst_us = 0, over_budget = 0;          // frame-time probe (DIAG report)
     int heap_prev = mallinfo().uordblks;           // heap-in-use probe (DoD T3: no per-frame allocation)
     while (1) {
         ++g_diag_frame;
         poll_input();
 
-        uint64 now = timer_us_gettime64();
+        uint64_t now = timer_us_gettime64();
         acc60 += (now - last) * 60u;
         last = now;
-        uint64 work_start = now;
+        uint64_t work_start = now;
         int steps = 0;
         while (acc60 >= 1000000u && steps < 4) {
 #if !defined(DIAG_SKIP_GAME) && !defined(DIAG_SKIP_UPDATE)
@@ -657,7 +658,7 @@ int main(int, char**) {
         DIAG_F("frame %d: wait_ready\n", g_diag_frame);
         pvr_wait_ready();
         BOOT_F("frame %d: PVR ready\n", g_diag_frame);
-        uint64 draw_start = timer_us_gettime64();
+        uint64_t draw_start = timer_us_gettime64();
         pvr_scene_begin();
         g_seq = 0;
         g_arena_used = 0; g_nbatches3 = 0; g_arena_open = -1;
@@ -685,7 +686,7 @@ int main(int, char**) {
 
         BOOT_F("frame %d: lists submitted\n", g_diag_frame);
         pvr_scene_finish();
-        uint64 done = timer_us_gettime64();
+        uint64_t done = timer_us_gettime64();
         BOOT_F("frame %d: scene finished\n", g_diag_frame);
         if (g_diag_frame == 60 || g_diag_frame == 600) {
             pvr_stats_t ps;
@@ -697,7 +698,7 @@ int main(int, char**) {
 
         // CPU time spent on this frame = game ticks + building/submitting the scene
         // (excludes waiting for the PVR / vblank).
-        uint32 work_us = (uint32)((draw_start - work_start) + (done - draw_start));
+        uint32_t work_us = (uint32_t)((draw_start - work_start) + (done - draw_start));
         if (work_us > worst_us) worst_us = work_us;
         if (work_us > 16667) ++over_budget;
         if (BATTLE_DIAG && g_diag_frame % 300 == 0) {
