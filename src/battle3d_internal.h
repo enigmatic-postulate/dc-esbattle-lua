@@ -64,7 +64,8 @@ enum Op : uint8_t { OP_PLAY, OP_IDLE, OP_MOVE, OP_FACE, OP_FACE_POINT, OP_FACE_H
                     OP_PHASE2,        // the boss's rune ring turns red
                     OP_CAPTION,       // a = caption id
                     OP_HEAL,          // the potion: the user's shown HP rises by -ev.dmg
-                    OP_NAMECARD };    // the boss's name card
+                    OP_NAMECARD,      // the boss's name card
+                    OP_SFX };         // slice 3D-7: a = index into battle3d.cpp's SOUND table (a swing on the wind-up)
 struct Cue { int16_t t; uint8_t op; int8_t actor; int16_t a, b; float f; r3d::Vec3 p; };
 const int MAX_CUES = 40;
 struct Seq {

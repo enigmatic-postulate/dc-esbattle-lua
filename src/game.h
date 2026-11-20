@@ -28,6 +28,10 @@ void game_draw();
 
 GameMode    game_mode();
 const char* game_mode_name();
+// Slice 3D-7 (task 0A): the scene for the DIAG frame-time report - the mode plus what tells its cost apart: the map
+// for the field's modes ("field:village", "dialog:barrow", "map_change:barrow"), the kind for a battle
+// ("battle:boss", "battle:patrol"), the mode alone otherwise ("title", "credits"). Never allocates.
+void        game_scene_tag(char* out, int cap);
 const PartyState& game_party();
 int         game_fade_alpha();                         // 0..255 of the transition overlay currently drawn
 int         game_pending_entity();                     // entity that started the current battle (-1 if none)

@@ -72,3 +72,55 @@ int dbgio_init(void); int dbgio_dev_select(const char*); int dbgio_printf(const 
 void dbglog(int, const char*, ...);
 uint64_t timer_ms_gettime64(void); uint64_t timer_us_gettime64(void);
 file_t fs_open(const char*, int); ssize_t fs_read(file_t, void*, size_t); int fs_close(file_t);
+// ---- slice 3D-7 (tasks 0B, 0C): copied from the installed KOS 2.3.0 headers (DreamSDK; kos git 9ba0350f), not guessed:
+// dc/asic.h (event codes, asic_evt_handler, asic_evt_handler_entry_t, asic_evt_set_handler, asic_evt_enable,
+// ASIC_IRQ_DEFAULT = ASIC_IRQ9), kos/linker.h (_bss_start), arch/arch.h (_arch_mem_top: 0x8d000000 on a 16 MiB
+// console), arch/stack.h (THD_KERNEL_STACK_SIZE). kos.h includes <unistd.h> (sbrk) and <malloc.h> itself.
+#include <unistd.h>
+#include <malloc.h>
+#define ASIC_EVT_PVR_ISP_OUTOFMEM         0x0200
+#define ASIC_EVT_PVR_STRIP_HALT           0x0201
+#define ASIC_EVT_PVR_PARAM_OUTOFMEM       0x0202
+#define ASIC_EVT_PVR_OPB_OUTOFMEM         0x0203
+#define ASIC_EVT_PVR_TA_INPUT_ERR         0x0204
+#define ASIC_EVT_PVR_TA_INPUT_OVERFLOW    0x0205
+#define ASIC_IRQ9                         0
+#define ASIC_IRQ_DEFAULT                  ASIC_IRQ9
+typedef void (*asic_evt_handler)(uint32_t code, void *data);
+typedef struct { asic_evt_handler hdl; void *data; } asic_evt_handler_entry_t;
+asic_evt_handler_entry_t asic_evt_set_handler(uint16_t code, asic_evt_handler handler, void *data);
+void asic_evt_enable(uint16_t code, uint8_t irqlevel);
+extern uint8_t _bss_start[];
+#define _arch_mem_top   ((uint32_t) 0x8d000000)
+#define THD_KERNEL_STACK_SIZE (64 * 1024)
+// ---- slice 3D-7 (file_read_at): kos/fs.h of the installed KOS: off_t fs_seek(file_t hnd, off_t offset, int whence);
+off_t fs_seek(file_t hnd, off_t offset, int whence);
+
+// ---- slice 3D-7 (platform/kos/audio_kos.cpp), copied from the installed KOS 2.3.0 (git 9ba0350f):
+// dc/sound/stream.h, dc/sound/sfxmgr.h, dc/sound/sound.h, kos/thread.h, kos/mutex.h, kos/fs.h
+typedef int snd_stream_hnd_t;
+#define SND_STREAM_INVALID -1
+typedef void *(*snd_stream_callback_t)(snd_stream_hnd_t hnd, int smp_req, int *smp_recv);
+int snd_stream_init_ex(int channels, size_t buffer_size);
+snd_stream_hnd_t snd_stream_alloc(snd_stream_callback_t cb, int bufsize);
+void snd_stream_queue_enable(snd_stream_hnd_t hnd);
+void snd_stream_queue_go(snd_stream_hnd_t hnd);
+void snd_stream_start_adpcm(snd_stream_hnd_t hnd, uint32_t freq, int st);
+void snd_stream_stop(snd_stream_hnd_t hnd);
+int snd_stream_poll(snd_stream_hnd_t hnd);
+void snd_stream_volume(snd_stream_hnd_t hnd, int vol);
+typedef uint32_t sfxhnd_t;
+#define SFXHND_INVALID 0
+sfxhnd_t snd_sfx_load_raw_buf(char *buf, size_t len, uint32_t rate, uint16_t bitsize, uint16_t channels);
+int snd_sfx_play_chn(int chn, sfxhnd_t idx, int vol, int pan);
+int snd_sfx_chn_alloc(void);
+// (snd_mem_available is in dc/sound/sound.h, which the real kos.h does NOT include: see the stub of that name)
+typedef struct kthread kthread_t;
+kthread_t *thd_create(bool detach, void *(*routine)(void *param), void *param);
+void thd_sleep(unsigned ms);
+void thd_set_label(kthread_t *thd, const char *label);
+typedef struct kos_mutex { unsigned int type; kthread_t *holder; int count; } mutex_t;
+#define MUTEX_INITIALIZER { 0, NULL, 0 }
+int mutex_lock(mutex_t *m);
+int mutex_unlock(mutex_t *m);
+void *fs_mmap(file_t hnd);

@@ -1,0 +1,1 @@
+sfx hit sfx/hit.adp 220 5 2 loud

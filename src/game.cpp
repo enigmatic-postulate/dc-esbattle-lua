@@ -1,5 +1,6 @@
 // game.cpp - see game.h
 #include "game.h"
+#include "audio.h"
 #include "battle.h"
 #include "battle3d.h"
 #include "chars.h"
@@ -99,6 +100,21 @@ const char* game_mode_name() {
     return "?";
 }
 
+void game_scene_tag(char* out, int cap) {
+    switch (g_mode) {
+    case GameMode::ToBattle: case GameMode::Battle:
+        snprintf(out, (size_t)cap, "%s:%s", game_mode_name(), g_boss_battle ? "boss" : "patrol");
+        break;
+    case GameMode::Field: case GameMode::Dialog: case GameMode::ToField: case GameMode::MapChange: case GameMode::Death:
+    case GameMode::Attract:
+        snprintf(out, (size_t)cap, "%s:%s", game_mode_name(), field_state().name);
+        break;
+    default:
+        snprintf(out, (size_t)cap, "%s", game_mode_name());
+        break;
+    }
+}
+
 static void set_mode(GameMode m) { g_mode = m; g_mode_t = 0; }
 
 static void trans_start(int id, TransLook look, int out, int in, void (*mid)()) {
@@ -156,6 +172,10 @@ static void refresh() {
 
 // ---------------------------------------------------------------------------- maps (slice 3D-6)
 static int current_map() { const int m = script_map_find(field_state().name); return m < 0 ? 0 : m; }
+// Slice 3D-7: the field's track for the map the hero stands on. The track that is already playing is not restarted
+// (src/audio.cpp); after a battle or a retry it starts from its beginning (ADPCM cannot resume mid-track).
+static bool g_dawn_music = false;   // the ending is playing its dawn theme (from T10 until the title)
+static void field_music() { eng::audio_event(current_map() == script_map_find("barrow") ? "music_barrow" : "music_village"); }
 
 // Loads map `id` (under a fade): the field, its scene and ground, the scripts' binding, its light (or `preset`).
 static bool load_map(int id, int preset) {
@@ -234,6 +254,7 @@ static void load_common_assets() {
     trans_init();
     screens_init();
     load_demo();
+    audio_boot();                                 // slice 3D-7: the cue table and the sound backend (no sound if it fails)
 }
 
 static void load_demo() {
@@ -336,6 +357,7 @@ bool game_init(const char* map_path) {
 // ---------------------------------------------------------------------------- title (GDD 5)
 static void enter_title() {
     g_session = false;
+    g_dawn_music = false;
     script_abort();
     dialog_reset();
     g_card.on = false;
@@ -453,6 +475,9 @@ static void start_battle(int entity, bool from_script, bool boss) {
     set_mode(GameMode::ToBattle);
     g_tid = T5;
     field3d_show_prompt(false);
+    // slice 3D-7, the encounter (plan 4.6.1 T5): a rush of air on the first flash, the field's track cut under it
+    // (6 ticks), the battle's theme in with the battle (12): the fades are the cue's own (romdisk/audio/cues.txt)
+    eng::audio_event("battle_start");
     eng::audio_event(boss ? "music_boss" : "music_battle");
 }
 
@@ -478,6 +503,7 @@ static void apply_win() {
 // T10's swap: the barrow at dawn under the white; the script (the ending) resumes.
 static void t10_mid() {
     set_mode(GameMode::Dialog);
+    g_dawn_music = true;
     eng::audio_event("music_dawn");
 }
 
@@ -531,6 +557,7 @@ static void tick_to_field() {
         g_fade_in = T_FADE_IN;
         battle_finish_stats(true);
         apply_win();
+        field_music();                                     // slice 3D-7: back from the victory sting to the map's track
         if (script_running()) {                            // a script's battle: it goes on
             set_mode(GameMode::Dialog);
         } else {
@@ -559,6 +586,7 @@ static void retry_mid() {
     ++g_stats.retries;
     set_mode(GameMode::Field);
     g_tid = 0;
+    field_music();                                         // slice 3D-7: from its start, after the death sting
     // GDD 13: a retry after the boss's win over the hero goes straight to his short intro (romdisk/scripts/barrow.txt)
     // (only if the checkpoint is on the boss's map: Brom's rest after the waystone puts the retry in the village)
     if (g_retry_boss) {
@@ -590,7 +618,9 @@ static void map_mid() {
         static const int DX[4] = { 0, 0, -1, 1 }, DY[4] = { 1, -1, 0, 0 };
         field_script_move(0, g_mc.x + DX[g_mc.dir & 3], g_mc.y + DY[g_mc.dir & 3], false);
     }
-    eng::audio_event(current_map() == script_map_find("barrow") ? "music_barrow" : "music_village");
+    // slice 3D-7 (plan 4.6.1): the ending's map change keeps its dawn theme through the gathering; every other map
+    // change brings the new map's track
+    if (!g_dawn_music) field_music();
 }
 
 static void start_map_change(int map, int x, int y, int dir, int preset, bool walk) {
@@ -764,6 +794,7 @@ static void tick_core() {
 }
 
 void game_tick() {
+    audio_tick();                                 // slice 3D-7: fades and rate limits run on the game's clock
     tick_core();
     // the catalogue id shown for T5 / T6 / T9 (traces): over once their counters have run out
     if ((g_tid == T5 || g_tid == T6) && g_fade_in == 0 && g_mode != GameMode::ToBattle && g_mode != GameMode::ToField) g_tid = 0;
@@ -870,7 +901,7 @@ void game_draw() {
         break;
     case GameMode::Error:    draw_error(); break;
     }
-    if (g_attract && ((g_mode_t / 30) & 1) == 0) ui_text_px(560, 24, "DEMO", 21.0f, 0xFFFFD070u, 8.6f);   // GDD 5
+    if (g_attract && ((g_mode_t / 30) & 1) == 0) ui_text_px(320, 72, "DEMO", 21.0f, 0xFFFFD070u, 8.6f, UA_CENTRE);   // GDD 5; top centre, under the HUD row (at 560 it ran off the right edge, over the HP box)
     portrait_frame_end();
     // transitions: T5 (flashes + iris), the T6/T1/T2/T7/T11 fades, T10's white
     if (g_mode == GameMode::ToBattle) trans_draw_flash_iris(g_trans, trans_def(T5).out - 8);

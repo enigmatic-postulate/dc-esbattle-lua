@@ -121,7 +121,7 @@ sys.exit(0 if ok else 1)
 PYEOF
 then ok "resources within budget: $res"; else bad "resources over budget" "$res"; fi
 rd_bytes=$(find romdisk -type f -exec cat {} + | wc -c)
-[ "$rd_bytes" -le 3100000 ] && ok "romdisk $rd_bytes bytes (<= 3.1 MB; slice 3D-6: the barrow, Corwin, 6 portraits; the UI atlas)" || bad "romdisk $rd_bytes bytes"
+[ "$rd_bytes" -le 5500000 ] && ok "romdisk $rd_bytes bytes (<= 5.5 MB; slice 3D-7: + the audio, docs/NEXT_SLICE_SOUND_SAVE.md 8; tools/audio/lint_cues.py holds the audio to 2.4 MiB)" || bad "romdisk $rd_bytes bytes"
 TMO=300 T $B32 - "$W/r1v.trace" --state-only --view --route tests/dialog/routes/r1_canonical.route --max-ticks 90000 > /dev/null 2>&1
 for f in field_walk field_fuzz2; do T $B32 tests/inputs/$f.in "$W/v_$f.trace" --state-only --view > /dev/null 2>&1; done
 vstat=$(cat "$W/r1v.trace" "$W/v_field_walk.trace" "$W/v_field_fuzz2.trace" | awk '/^V /{for(i=2;i<=NF;i++){split($i,a,"=");v[a[1]]=a[2]} m=v["mode"]; if(v["out"]>o[m])o[m]=v["out"]; if(v["arena"]>ar[m])ar[m]=v["arena"]; d+=v["drops"]} END{printf "field out %d arena %d, dialog out %d arena %d, drops %d", o["field"], ar["field"], o["dialog"], ar["dialog"], d+0}')

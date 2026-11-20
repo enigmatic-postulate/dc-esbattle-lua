@@ -175,7 +175,7 @@ sys.exit(0 if v(r'textures (\d+)/') <= 30 and v(r'VRAM (\d+) KiB') <= 1280 and v
          v(r'model arena (\d+) KiB') <= 1700 and v(r'script pools (\d+) B') <= 32 * 1024 else 1)
 PYEOF
 rd_bytes=$(find romdisk -type f -exec cat {} + | wc -c)
-[ "$rd_bytes" -le 3100000 ] && ok "romdisk $rd_bytes bytes (<= 3.1 MB: + the UI atlas and the cel-study hulls)" || bad "romdisk $rd_bytes bytes"
+[ "$rd_bytes" -le 5500000 ] && ok "romdisk $rd_bytes bytes (<= 5.5 MB; slice 3D-7: + the audio, docs/NEXT_SLICE_SOUND_SAVE.md 8; tools/audio/lint_cues.py holds the audio to 2.4 MiB)" || bad "romdisk $rd_bytes bytes"
 g++ -std=gnu++17 -O2 -DHOST_ALLOC_COUNT $SHZ src/*.cpp platform/host/host_engine.cpp platform/host/trace_main.cpp platform/host/battle_bot.cpp \
     platform/host/story.cpp build/sh4zam-host/libsh4zam.a -o "$W/trace_alloc" 2> "$W/alloc_build.err" || bad "alloc build" "$(head -3 "$W/alloc_build.err")"
 heap=""; for r in full cp_c3 idle_attract; do

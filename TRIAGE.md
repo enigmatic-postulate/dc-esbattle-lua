@@ -276,3 +276,18 @@ Always `make clean` when switching (make does not track the flag).
 | The HUD and battle text look like the old 5x7 pixel font | the atlas did not load: the serial log says `ui: /rd/ui/ui.uia missing or invalid`; rebuild the romdisk (`make rm-elf && make`) - the game keeps working on the old font (the fallback) |
 | Thin lines or specks at the edges of glyphs / icons | bilinear filtering reading a neighbour in the atlas: raise the gap in `pack()` of `tools/ui/make_ui_atlas.py` (2 px today) |
 | DIAG's heap line grows during the credits or a busy battle | a sprite queue grew: run the host with `--sprite-queues` on the same route; reserve the texture's queue in its init (`eng::sprite_reserve`) |
+
+## Slice 3D-7: sound (docs/sound_save/STAGE_A_NOTES.md)
+
+| Symptom | Likely cause | What to do |
+|---|---|---|
+| The serial log stops after `sh4zam ... linked` (Flycast) | KOS's `scif_flush()` timed out and switched serial output off for good | fixed: the log uses its own flush (`log_flush` in `platform/kos/main.cpp`); never call `dbgio_flush()` |
+| `make` builds only `romdisk.img` | a rule above `all:` became the default goal | the makefile sets `.DEFAULT_GOAL := all`; `tests/sound_save` checks it |
+| No sound at all; boot log says `audio: the sound backend is off` | `snd_boot` failed: the line before it says why (`snd_stream_init_ex failed`, `effect ... did not load`, `no stream`) | send the boot log; `make clean && make NO_MUSIC=1` to test the effects alone |
+| No sound; boot log says `audio: no /rd/audio/cues.txt` | the romdisk was not rebuilt with `romdisk/audio/` | `make clean && make`; `python3 tools/audio/make_standins.py` regenerates the files |
+| Effects play, no music | the stream or its thread | the DIAG report's `audio:` line: `tracks started` stays 0 = the request never reached the thread; `poll errors` rising = `snd_stream_poll` fails |
+| Music stutters or repeats a second of itself | the stream ran dry: the poll thread did not run for longer than the buffer lasts | the DIAG `longest gap between stream polls` (must stay far below `buffer 1486 ms`); note the scene |
+| A click each time a track loops | the loop seam | `python3 tools/audio/adpcm.py romdisk/audio/music/<track>.adp` must print `seam=ok`; if it does, report it (the chip differs from the model) |
+| A loud click when a track starts | the start reached the AICA before its volume | report it: the queued start (`snd_stream_queue_enable`) should prevent this |
+| The game itself behaves differently with sound | it must not | `make clean && make NO_AUDIO=1` and compare; `tests/sound_save` AU-T7 proves the logic never feeds back |
+

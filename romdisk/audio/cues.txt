@@ -1,0 +1,69 @@
+# cues.txt - every sound the game can make (slice 3D-7, docs/NEXT_SLICE_SOUND_SAVE.md 6.1). Loaded at boot by
+# src/audio.cpp; checked by tools/audio/lint_cues.py (same rules, same messages). Files are under /rd/audio/.
+#
+#   music  <name> loop|once <file> <vol> [<fade_out> <fade_in>]   a track on the music stream ("once": a sting).
+#                                                              fades in ticks (default 20 20): how fast the track
+#                                                              before it leaves and this one arrives when an event
+#                                                              starts it
+#   sfx    <name> <file> <vol> <prio> <min_gap> [flags]        an effect: vol 0-255, prio 1-9 (9 = never dropped for a
+#                                                              lower one), min_gap = ticks before it may play again
+#                                                              flags: pan_actor (battle cues pan with the actor)
+#   alias  <event> <cue>                                       an event name the game fires -> a cue above
+#   silent <event>                                             an event that makes no sound, on purpose
+#
+# The game fires event names (eng::audio_event): "music_<name>" starts music <name>, "sting_<name>" plays the
+# once-track <name>, anything else is an sfx name; an alias overrides all three.
+
+music   title           loop   music/title.adp      170  20 45
+music   village         loop   music/village.adp    150
+music   barrow          loop   music/barrow.adp     160
+music   battle          loop   music/battle.adp     150   6 12     # the field's track is cut on the encounter's flash
+music   boss            loop   music/boss.adp       160   6 12
+music   dawn            loop   music/dawn.adp       160
+music   victory         once   music/victory.adp    180
+music   death           once   music/death.adp      180
+alias   music_credits   title                       # SA3: the credits reuse the title theme (romdisk budget)
+
+sfx     menu_move        sfx/menu_move.adp        150  3   2
+sfx     menu_confirm     sfx/menu_confirm.adp     170  4   4
+sfx     menu_cancel      sfx/menu_cancel.adp      160  4   4
+sfx     menu_denied      sfx/menu_denied.adp      150  4   6
+sfx     text_blip        sfx/text_blip.adp         90  1   3
+sfx     talk             sfx/talk.adp             220  4   6
+sfx     dialog_advance   sfx/dialog_advance.adp   120  2   4
+sfx     step_grass       sfx/step_grass.adp       130  1   8
+sfx     step_stone       sfx/step_stone.adp       130  1   8
+sfx     swing            sfx/swing.adp            120  5   4   pan_actor
+sfx     enemy_swing      sfx/enemy_swing.adp      120  5   4   pan_actor
+sfx     hit_bone         sfx/hit_bone.adp         150  6   2   pan_actor
+sfx     hit_hero         sfx/hit_hero.adp         170  6   2   pan_actor
+sfx     hit_guarded      sfx/hit_guarded.adp      140  6   2   pan_actor
+sfx     fire_cast        sfx/fire_cast.adp        140  5   6   pan_actor
+sfx     bolt_cast        sfx/bolt_cast.adp        130  5   6   pan_actor
+sfx     fire_impact      sfx/fire_impact.adp      170  6   4   pan_actor
+sfx     arcane_impact    sfx/arcane_impact.adp    160  6   4   pan_actor
+sfx     guard_up         sfx/guard_up.adp         140  5   6   pan_actor
+sfx     potion           sfx/potion.adp           150  5   6   pan_actor
+sfx     bones_collapse   sfx/bones_collapse.adp   150  5   6   pan_actor
+sfx     summon           sfx/summon.adp           180  7  20
+sfx     charge           sfx/charge.adp           200  8  20
+sfx     soul_rend        sfx/soul_rend.adp        210  9   0
+sfx     grave_fire       sfx/grave_fire.adp       170  7  10
+sfx     bone_ward        sfx/bone_ward.adp        160  7  10
+sfx     phase_change     sfx/phase_change.adp     200  8  20
+sfx     battle_start     sfx/battle_start.adp     190  7  20
+sfx     gate             sfx/gate.adp             180  6  30
+sfx     waystone         sfx/waystone.adp         180  6  30
+sfx     save             sfx/save.adp             100  2  30
+sfx     cheer            sfx/cheer.adp            190  6  30
+sfx     warden_rise      sfx/warden_rise.adp      190  7  30
+sfx     boss_name        sfx/boss_name.adp        200  8  30
+
+# The sprite battle (the 2D fallback view, tests) still fires slice 3D-6's event names when the rules resolve; the 3D
+# battle fires the cues above from its animation sequences instead (src/battle3d.cpp).
+alias   sting_boss_name  boss_name
+alias   fireball         fire_cast
+alias   shield           guard_up
+alias   boss_skill       charge
+alias   hit              hit_bone
+alias   skip             menu_cancel

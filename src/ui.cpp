@@ -1,4 +1,5 @@
 // ui.cpp - port of battle/ui.lua
+#include "engine.h"
 #include "ui.h"
 #include "fastmath.h"
 #include "font.h"
@@ -59,50 +60,56 @@ bool ui_update(BattleCtx& ctx, Actor& user, PendingAction& out) {
     case UiState::Home: {
         // 3 commands (Attack, Fire, Guard), or 4 with the Potion (GDD 11.1; rules().potions)
         const int n = ui_command_count();
-        if (click(UB_LEFT))       { ui.home_i = (ui.home_i + n - 1) % n; }
-        else if (click(UB_RIGHT)) { ui.home_i = (ui.home_i + 1) % n; }
+        // slice 3D-7: the command menu clicks as the cursor moves and answers every press (confirm / denied / cancel)
+        if (click(UB_LEFT))       { ui.home_i = (ui.home_i + n - 1) % n; eng::audio_event("menu_move"); }
+        else if (click(UB_RIGHT)) { ui.home_i = (ui.home_i + 1) % n; eng::audio_event("menu_move"); }
 
-        if (click(UB_Y)) { ui.home_i = 2; return false; }
+        if (click(UB_Y)) { if (ui.home_i != 2) eng::audio_event("menu_move"); ui.home_i = 2; return false; }
 
         if (click(UB_FIRE)) {
             if (ui.home_i == 0) {
                 ui.state = UiState::Target;
                 ui.target_i = 0;
                 ui.target_entry_lock = TARGET_ENTRY_LOCK;
+                eng::audio_event("menu_confirm");
             } else if (ui.home_i == 1) {
                 if (!fire_locked(ctx)) {                  // slice 3D-5: greyed with a lock until Wren teaches it
                     ui.state = UiState::TargetAll;        // confirm step: every enemy is marked
                     ui.target_entry_lock = TARGET_ENTRY_LOCK;
-                }
+                    eng::audio_event("menu_confirm");
+                } else eng::audio_event("menu_denied");
             } else if (ui.home_i == 2) {
+                eng::audio_event("menu_confirm");
                 out = PendingAction();
                 out.skill = &skill(SK_GUARD);
                 out.targets.push(&user);
                 out.cursor_index = 0;
                 return true;
             } else if (ctx.potions > 0) {                 // Potion: greyed (A does nothing) when none are left
+                eng::audio_event("menu_confirm");
                 out = PendingAction();
                 out.skill = &skill(SK_POTION);
                 out.targets.push(&user);
                 out.cursor_index = 0;
                 return true;
-            }
+            } else eng::audio_event("menu_denied");
         }
         return false;
     }
 
     case UiState::Target: {
-        if (click(UB_B)) { ui.state = UiState::Home; ui.target_entry_lock = 0; return false; }
+        if (click(UB_B)) { ui.state = UiState::Home; ui.target_entry_lock = 0; eng::audio_event("menu_cancel"); return false; }
         const SkillDef& sk = skill(SK_ATTACK);
         ActorList cand = alive_enemies(ctx, user);
         if (cand.empty()) { ui.state = UiState::Home; return false; }
         const int n = cand.size();
         ui.target_i = clampv(ui.target_i, 0, n - 1);
 
-        if (click(UB_LEFT))       { ui.target_i = (ui.target_i - 1 + n) % n; }
-        else if (click(UB_RIGHT)) { ui.target_i = (ui.target_i + 1) % n; }
+        if (click(UB_LEFT))       { ui.target_i = (ui.target_i - 1 + n) % n; if (n > 1) eng::audio_event("menu_move"); }
+        else if (click(UB_RIGHT)) { ui.target_i = (ui.target_i + 1) % n; if (n > 1) eng::audio_event("menu_move"); }
 
         if (ui.target_entry_lock == 0 && click(UB_FIRE)) {
+            eng::audio_event("menu_confirm");
             out = PendingAction();
             out.skill = &sk;
             out.targets = select_targets(ctx, user, sk.target_mode, ui.target_i);
@@ -114,8 +121,9 @@ bool ui_update(BattleCtx& ctx, Actor& user, PendingAction& out) {
     }
 
     case UiState::TargetAll:
-        if (click(UB_B)) { ui.state = UiState::Home; ui.target_entry_lock = 0; return false; }
+        if (click(UB_B)) { ui.state = UiState::Home; ui.target_entry_lock = 0; eng::audio_event("menu_cancel"); return false; }
         if (ui.target_entry_lock == 0 && click(UB_FIRE)) {
+            eng::audio_event("menu_confirm");
             out = PendingAction();                // AOE: targets left empty; battle selects enemy_all
             out.skill = &skill(SK_FIREBALL);
             out.cursor_index = 0;

@@ -24,6 +24,7 @@
 //   --text-widths FILE    prints "W <px> <glyphs>" for each line of FILE with the dialog font (parity with lint.py)
 // --dump writes every draw (3D vertices included) of the selected ticks to DIR/frame_NNNNN.txt
 // for tools/render_frame.py.
+#include "../../src/audio.h"
 #include "../../src/battle.h"
 #include "../../src/battle3d.h"
 #include "../../src/field.h"
@@ -39,6 +40,7 @@
 #include "../../src/skills.h"
 #include "../../src/lights.h"
 #include "../../src/screens.h"
+#include <malloc.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -244,6 +246,15 @@ int main(int argc, char** argv) {
         fprintf(g_trace, "D resources: textures %d/32, VRAM %ld KiB, materials %d/256, model arena %d KiB, animation library %d KiB, script pools %d B (compiler scratch %d B)\n",
                 host_textures(), host_vram_bytes() / 1024, host_materials(), dmf::loaded_bytes() / 1024,
                 anim::anim_library_bytes() / 1024, st.pool_bytes, st.scratch_bytes);
+        // Slice 3D-7 (task 0B): the host's side of the Dreamcast's boot "ram" line - the program's static data
+        // (the host has no embedded romdisk) and the heap in use after the boot. The SH4 numbers come from hardware.
+        {
+            extern char __data_start, __bss_start, _end;
+            const struct mallinfo2 mi = mallinfo2();
+            fprintf(g_trace, "D ram: static data %ld KiB (of it BSS %ld KiB), heap %ld KiB claimed / %ld KiB in use after the boot\n",
+                    (long)(&_end - &__data_start) / 1024, (long)(&_end - &__bss_start) / 1024,
+                    (long)(mi.arena + mi.hblkhd) / 1024, (long)(mi.uordblks + mi.hblkhd) / 1024);
+        }
     }
     if (text_widths) {
         FILE* tf = fopen(text_widths, "r");
@@ -438,6 +449,7 @@ int main(int argc, char** argv) {
         host_frame_begin(n, dump);
         g_alloc_watch = n > 1;                       // after the boot: no allocation may happen in a tick or a draw
         bt::game_tick();
+        bt::audio_frame();                           // slice 3D-7: one displayed frame per tick here
         bt::game_draw();
         g_alloc_watch = 0;
         host_frame_end();

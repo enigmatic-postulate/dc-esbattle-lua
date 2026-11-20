@@ -113,6 +113,7 @@ TitleAction title_tick() {
         if (input_pressed(eng::KEY_START) || input_pressed(eng::KEY_FIRE)) {
             input_consume(eng::KEY_FIRE);
             g_t.menu = true; g_t.menu_t = 0; g_t.sel = 0;
+            eng::audio_event("menu_confirm");                  // slice 3D-7: PRESS START answers
         }
         return TITLE_NONE;
     }
@@ -128,7 +129,7 @@ TitleAction title_tick() {
         input_consume(eng::KEY_FIRE);
         return g_t.sel == 0 ? TITLE_NEW_GAME : TITLE_CREDITS;
     }
-    if (input_pressed(eng::KEY_B)) g_t.menu = false;           // back to PRESS START
+    if (input_pressed(eng::KEY_B)) { g_t.menu = false; eng::audio_event("menu_cancel"); }   // back to PRESS START
     return TITLE_NONE;
 }
 
@@ -160,9 +161,14 @@ void title_draw() {
 }
 
 void title_orbit(int t, float eye[3], float look[3], float* fov) {
-    // the square between the houses (the road's bend by the wagon), seen from ~9 units up, one loop per 3,600 ticks
+    // the square between the houses (the road's bend by the wagon), seen from ~9 units up: a slow sweep from side to
+    // side, there and back in 3,600 ticks. Not a full circle: the village's houses and props are VS1's, cut for the
+    // field camera (it looks north and never turns: no back walls, no faces turned away - docs/SLICE_3D_VILLAGE.md
+    // "camera-cone culling", yaw +-30 degrees), so a camera north of a house looked straight into it, and the full
+    // loop also flew through the stone house's roof. The sweep stays inside that cone (+-26 degrees, eased at the ends).
     const float cx = 18.0f, cz = 13.0f, r = 9.5f, h = 7.5f;
-    const float a = 6.28318531f * (float)(t % 3600) / 3600.0f;
+    const float SWEEP = 0.45f;                                              // radians either side of due south
+    const float a = SWEEP * shz_sinf(6.28318531f * (float)(t % 3600) / 3600.0f);
     const shz_sincos_t sc = shz_sincosf(a);
     eye[0] = cx + sc.sin * r; eye[1] = h + 0.8f * sc.cos; eye[2] = cz + sc.cos * r;
     look[0] = cx; look[1] = 0.8f; look[2] = cz;
