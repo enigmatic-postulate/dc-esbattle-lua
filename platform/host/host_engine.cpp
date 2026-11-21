@@ -1,5 +1,6 @@
 // host_engine.cpp - engine.h implementation for the host harness. Records every engine
 // call as a text trace (format documented in harness/compare.py / tools/render_trace.py).
+#include "../../src/audio.h"
 #include "../../src/engine.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -275,7 +276,18 @@ float random01() {
 }
 
 void dbg_print(const char* s) { fprintf(g_trace, "D %s\n", s); }
-void audio_event(const char* name) { if (g_trace && g_audio_trace) fprintf(g_trace, "A %s\n", name); }
+// The hook's `A` line (slice 3D-6), then the audio logic (slice 3D-7), whose backend commands are `AC` lines.
+void audio_event(const char* name) { if (g_trace && g_audio_trace) fprintf(g_trace, "A %s\n", name); bt::audio_event(name); }
+bool snd_boot(const SndBank&) { return true; }
+void snd_play(int voice, int sfx, int vol, int pan) {
+    if (g_trace && g_audio_trace) fprintf(g_trace, "AC play %s voice=%d vol=%d pan=%d\n", bt::audio_sfx_name(sfx), voice, vol, pan);
+}
+void snd_music(int track, uint32_t start_sample, int vol, bool loop) {
+    if (!(g_trace && g_audio_trace)) return;
+    if (track < 0) fprintf(g_trace, "AC music stop\n");
+    else fprintf(g_trace, "AC music %s start=%u vol=%d loop=%d\n", bt::audio_track_name(track), (unsigned)start_sample, vol, loop ? 1 : 0);
+}
+void snd_music_volume(int vol) { if (g_trace && g_audio_trace) fprintf(g_trace, "AC mvol %d\n", vol); }
 // Silent unless BOOT_LOG=1 (then stderr): shows the boot breadcrumb sequence the KOS build prints.
 void boot_log(const char* s) { static const char* e = getenv("BOOT_LOG"); if (e && *e == '1') fprintf(stderr, "[boot] %s\n", s); }
 
@@ -296,6 +308,18 @@ int file_read(const char* path, char* buf, int cap) {
     if (n >= cap) return -1;
     buf[n] = '\0';
     return n;
+}
+
+int file_read_at(const char* path, int offset, void* buf, int n) {
+    AllocPause pause;
+    char real_path[512];
+    if (strncmp(path, "/rd/", 4) == 0) snprintf(real_path, sizeof real_path, "%s/%s", g_romdisk, path + 4);
+    else snprintf(real_path, sizeof real_path, "%s", path);
+    FILE* f = fopen(real_path, "rb");
+    if (!f) return -1;
+    int got = fseek(f, offset, SEEK_SET) == 0 ? (int)fread(buf, 1, (size_t)n, f) : -1;
+    fclose(f);
+    return got;
 }
 
 bool file_exists(const char* path) {

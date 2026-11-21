@@ -22,7 +22,7 @@ make -s host >/dev/null 2>&1 || { echo "host build failed"; exit 1; }
 SHZ=$(make -s print-host-shz-flags)
 warn=$(g++ -std=gnu++17 -Wall -Wextra -Wshadow $SHZ -fsyntax-only src/*.cpp 2>&1 | grep -c warning)
 [ "$warn" = "0" ] && ok "src builds with 0 warnings (-Wall -Wextra -Wshadow)" || bad "src warnings: $warn"
-g++ -std=gnu++17 -O2 -Wall -Wextra $SHZ src/anim.cpp src/dmf.cpp tests/battle3d/anim_dump.cpp platform/host/host_engine.cpp \
+g++ -std=gnu++17 -O2 -Wall -Wextra $SHZ src/anim.cpp src/dmf.cpp src/audio.cpp tests/battle3d/anim_dump.cpp platform/host/host_engine.cpp \
     build/sh4zam-host/libsh4zam.a -o build/anim_dump 2>"$W/anim_dump.err" || bad "anim_dump build" "$(cat "$W/anim_dump.err")"
 
 echo "== animation library: C++ anim::sample == tools/battle3d/dmfio.py (every clip, 6 times, 4 models)"

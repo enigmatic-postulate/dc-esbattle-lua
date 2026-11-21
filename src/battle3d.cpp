@@ -389,6 +389,11 @@ static Vec3 melee_spot(const View& u, const View& tg) {
     return v3(tg.pos.x + dx * k, tg.pos.y, tg.pos.z + dz * k);
 }
 
+// Slice 3D-7: sounds fired by OP_SFX cues (index = the SND_ value). A table, so tools/audio/lint_cues.py finds the names.
+enum { SND_SWING, SND_ENEMY_SWING };
+static const char* const SOUND[] = { "swing", "enemy_swing" };
+const int T_SWING_LEAD = 7;
+
 static void build_melee(Seq& s, View& u, View& tg) {
     const int ui = vidx(&u), ti = vidx(&tg);
     const Vec3 spot = melee_spot(u, tg);
@@ -404,6 +409,9 @@ static void build_melee(Seq& s, View& u, View& tg) {
     cue(s, t, OP_PLAY, ui, atk, -1, 0.08f);
     int imp = anim::clip_event(g_b3.lib, atk, anim::EV_IMPACT);
     if (imp < 0) imp = anim::clip_ticks(g_b3.lib, atk) * 6 / 10;
+    // slice 3D-7: the swing is heard as the weapon comes down, 7 ticks before it lands (the hero's sword and an
+    // enemy's blade sound different); the hit sounds with the impact itself (impact())
+    cue(s, t + (imp > T_SWING_LEAD ? imp - T_SWING_LEAD : 0), OP_SFX, ui, u.a->team == Team::Player ? SND_SWING : SND_ENEMY_SWING);
     cue(s, t + imp, OP_IMPACT, ti, 0);
     // recovery: back to the slot shortly after the blow lands (the clip's follow-through is cut)
     const int rest = anim::clip_ticks(g_b3.lib, atk) - imp;
@@ -594,6 +602,8 @@ static void impact(Seq& s, int k, bool melee) {
     View* u = view_of(s.ev.user);
     if (!tg) return;
     const bool guarded = tg->guard_shown && s.ev.skill == SK_ATTACK;
+    // slice 3D-7: a blow sounds on the frame it lands (with the sparks and the hit-stop): on a guard, on the hero, on bone
+    if (melee) eng::audio_event(guarded ? "hit_guarded" : (tg->a->team == Team::Player ? "hit_hero" : "hit_bone"));
     tg->shown_hp = tg->shown_hp - h.dmg < 0 ? 0 : tg->shown_hp - h.dmg;
     char num[12];
     snprintf(num, sizeof num, "%d", h.dmg);
@@ -609,6 +619,7 @@ static void impact(Seq& s, int k, bool melee) {
         view_play(*tg, tg->c_death, 0.08f, -1);
         tg->dying = true; tg->dead_t = 0;
         tg->guard_shown = false; tg->burn_shown = false; tg->charge_shown = false;
+        if (tg->a->team != Team::Player) eng::audio_event("bones_collapse");
     } else if (guarded) {
         view_play(*tg, clip("block_hit"), 0.06f, clip("blocking"));
         fx_text(*tg, "GUARD", 0xFF80D0FF, 2);
@@ -651,6 +662,7 @@ static void fire_cue(Seq& s, const Cue& c) {
         Projectile p;
         p.from = v->hand; p.to = view_chest(*tg);
         p.t = 0; p.dur = (int)c.f; p.kind = c.b; p.hit = c.a; p.arc = c.b == PROJ_FIREBALL ? 1.2f : 0.3f;
+        eng::audio_event(c.b == PROJ_FIREBALL ? "fire_cast" : "bolt_cast");
         if (!g_b3.projs.push(p)) impact(s, c.a, false);
         break;
     }
@@ -659,6 +671,7 @@ static void fire_cue(Seq& s, const Cue& c) {
         break;
     case OP_GUARD_ON:
         if (v) { v->guard_shown = true; fx_burst(BURST_GUARD, view_chest(*v), v->pos); fx_text(*v, "GUARD", 0xFF80D0FF, 2); }
+        eng::audio_event(s.kind == SEQ_WARD ? "bone_ward" : "guard_up");
         break;
     case OP_BURST:
         if (v) fx_burst(c.a, view_chest(*v), v->pos);
@@ -670,6 +683,7 @@ static void fire_cue(Seq& s, const Cue& c) {
             snprintf(num, sizeof num, "%d", s.ev.dmg);
             fx_text(*v, num, 0xFFFFA040, 3);
             v->flash = 4;
+            eng::audio_event("fire_impact");
             if (v->shown_hp <= 0 && v->a->hp <= 0) {
                 view_play(*v, v->c_death, 0.08f, -1);
                 v->dying = true; v->dead_t = 0; v->burn_shown = false;
@@ -684,6 +698,7 @@ static void fire_cue(Seq& s, const Cue& c) {
     case OP_CHARGE_ON:
         if (v) {
             v->charge_shown = true;
+            eng::audio_event("charge");                 // the warning the player learns to Guard from (GDD 12.3)
             fx_burst(BURST_DARK, view_head(*v), v->pos);
             g_b3.caption = CAP_CHARGE; g_b3.caption_t = 140;
         }
@@ -693,6 +708,7 @@ static void fire_cue(Seq& s, const Cue& c) {
         View* tg = view_of(s.ev.hits[0].target);
         if (!tg) break;
         v->charge_shown = false;
+        eng::audio_event("soul_rend");
         Projectile p;
         p.from = v3(v->pos.x, 0.3f, v->pos.z); p.to = v3(tg->pos.x, 0.3f, tg->pos.z);
         p.t = 0; p.dur = c.a > 0 ? c.a : 20; p.kind = PROJ_WAVE; p.hit = 0; p.arc = 0.0f;
@@ -714,6 +730,7 @@ static void fire_cue(Seq& s, const Cue& c) {
             p.cell = FX_FLAME; p.additive = true; p.c0 = 0xFFE080FF; p.c1 = 0x006010C0; p.grav = 0;
             fx_particle(p);
         }
+        eng::audio_event("grave_fire");
         impact(s, c.a, false);
         g_b3.cam.shake = T_SHAKE_MELEE;
         if (tg->a->hp > 0) { tg->burn_shown = true; fx_text(*tg, "BURN", 0xFFFF8040, 2); }
@@ -724,6 +741,7 @@ static void fire_cue(Seq& s, const Cue& c) {
         g_b3.cam.shake = T_SHAKE_BIG * 0.6f;
         break;
     case OP_RAISE:
+        eng::audio_event("summon");
         for (const Hit& h : s.ev.hits) {
             View* m = view_of(h.target);
             if (!m) continue;
@@ -740,6 +758,7 @@ static void fire_cue(Seq& s, const Cue& c) {
         }
         break;
     case OP_CRUMBLE:
+        eng::audio_event("bones_collapse");
         for (const Hit& h : s.ev.hits) {
             View* m = view_of(h.target);
             if (!m || !m->present || m->dying) continue;
@@ -750,6 +769,7 @@ static void fire_cue(Seq& s, const Cue& c) {
         break;
     case OP_PHASE2:
         g_b3.boss_phase2 = true;
+        eng::audio_event("phase_change");
         break;
     case OP_CAPTION:
         g_b3.caption = c.a; g_b3.caption_t = 200;
@@ -763,10 +783,14 @@ static void fire_cue(Seq& s, const Cue& c) {
             snprintf(num, sizeof num, "+%d", heal);
             fx_text(*v, num, 0xFF70F090, 3);
             fx_burst(BURST_HEAL, view_chest(*v), v->pos);
+            eng::audio_event("potion");
         }
         break;
     case OP_NAMECARD:
         g_b3.namecard_t = 110;
+        break;
+    case OP_SFX:
+        if (c.a >= 0 && c.a < (int)(sizeof SOUND / sizeof SOUND[0])) eng::audio_event(SOUND[c.a]);
         break;
     case OP_END:
         s.ended = true;
@@ -965,6 +989,7 @@ static void projectiles_step() {
                         g_b3.cam.shake = T_SHAKE_BIG;
                     } else if (tg) {
                         fx_burst(p.kind == PROJ_FIREBALL ? BURST_FIRE : BURST_ARCANE, p.to, p.from);
+                        eng::audio_event(p.kind == PROJ_FIREBALL ? "fire_impact" : "arcane_impact");
                         impact(*s, k, false);
                         g_b3.cam.shake = p.kind == PROJ_FIREBALL ? T_SHAKE_MELEE : T_SHAKE_MELEE * 0.6f;
                         if (p.kind == PROJ_FIREBALL && tg->a->hp > 0) {

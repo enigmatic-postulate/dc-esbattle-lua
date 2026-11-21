@@ -159,8 +159,11 @@ void battle_update() {
         {   // slice 3D-6: audio hooks (S12) and the results card's counts
             static const char* const SOUND[] = { "swing", "fireball", "shield", "potion" };
             const int si = skill_index(&sk);
-            if (result.ok) eng::audio_event(si >= 0 && si < 4 ? SOUND[si] : "boss_skill");
-            if (result.ok && (result.kind == ResultKind::Single || result.kind == ResultKind::Aoe)) eng::audio_event("hit");
+            // slice 3D-7: the 3D battle plays its sounds from the animation sequences (battle3d.cpp), on the frames
+            // they belong to; only the sprite view still sounds here, when the rules resolve
+            const bool snd2d = g_view != BattleView::Models3D;
+            if (snd2d && result.ok) eng::audio_event(si >= 0 && si < 4 ? SOUND[si] : "boss_skill");
+            if (snd2d && result.ok && (result.kind == ResultKind::Single || result.kind == ResultKind::Aoe)) eng::audio_event("hit");
             const bool hero = ctx.active->team == Team::Player;
             if (hero) { ++ctx.tally.hero_turns; if (result.ok && skill_index(&sk) == SK_POTION) ++ctx.tally.potions_used; }
             auto count = [&](const Actor* t, int d) {

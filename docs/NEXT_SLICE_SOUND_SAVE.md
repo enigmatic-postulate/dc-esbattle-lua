@@ -530,11 +530,11 @@ estimated instructions per frame, plan 3D-6 D13) stay as the host-side gate.
 | Sound RAM (2 MiB) | 0 | driver + stream buffers (~64-128 KiB) + effects (<= 320 KiB) | <= 1,024 KiB used (half the chip: headroom for the future) | boot report (`snd_mem_available`) |
 | Main RAM: audio on the romdisk | 0 | music <= 2.0 MiB + effects <= 0.32 MiB | <= 2.4 MiB | AU-T4 |
 | Romdisk total | 3.01 MB | ~2.4 MB | <= 5.5 MB | AU-T4 |
-| Free main RAM after boot | TBD (Stage 0) | - 2.4 MiB | >= 1.5 MiB left | boot RAM line |
+| Free main RAM after boot | **3,253 KiB with the 2.0 MiB of stand-in audio already in the image** (about 5,270 KiB for slice 3D-6 alone; image 11,953 KiB, of it BSS 6,210 KiB; heap 1,182 KiB claimed). Boot log of 2026-11-19, Flycast, non-DIAG build | the audio is in; ~0.1 MiB more if the music reaches its 2.0 MiB cap | >= 1.5 MiB left: **holds, with ~1.7 MiB to spare** | boot RAM line |
 | Heap after boot, game thread | 0 allocations | 0 | 0 | host counter, DIAG |
 | Heap, VMU worker | - | KOS-internal | net 0 per call | SV-T6, DIAG |
 | VMU file | - | 2 blocks | <= 3 blocks | SV-T1 |
-| Boot to the title's first frame (hardware) | TBD | the audio boot + the VMU scan | <= 1 s more than Stage 0's value, and hidden under the splash | checklist |
+| Boot to the title's first frame (hardware) | TBD (Flycast, not the reference: 2.3 s) | the audio boot + the VMU scan | <= 1 s more than Stage 0's value, and hidden under the splash | checklist |
 | Save write (hardware) | - | on the worker thread | any length; **0 frame drops** during it | checklist |
 | 3D vertices, new 2D (menus, overlays) | as 3D-6 | overlays ~200 vertices | 18,000 / 1.60 M (unchanged) | `--path` sweeps (title with 4 items, pause, options) |
 | Texture slots / VRAM | 29 / 1,236 KiB (the UI atlas since `docs/UI_ART.md`) | the VMU icon (if drawn in game: 2 KiB), the studio card (<= 32 KiB; or in the UI atlas) | 32 slots / 1,300 KiB | `--resources` |

@@ -1,0 +1,6 @@
+sfx hit sfx/hit.adp 220 5 2 pan_actor
+music m once m.adp 1
+music n loop n.adp 9 6 12
+alias a hit
+alias b m
+silent quiet

@@ -25,9 +25,11 @@
 #include <stdint.h>
 #include <vector>
 
+#include "../../src/audio.h"
 #include "../../src/engine.h"
 #include "../../src/hwmath.h"      // SH4ZAM: version check + the library (see src/hwmath.h)
 #include "../../src/game.h"
+#include "audio_kos.h"
 
 #ifndef PNG_NO_ALPHA
 #define PNG_NO_ALPHA 0
@@ -43,12 +45,27 @@
 //   game   - never touch the game code: only the renderer + input overlay run
 //   update - run game_init + game_draw, never game_tick
 //   draw   - run game_init + game_tick, never game_draw
-// DIAG builds also print a frame-time report every 300 frames (slice task C2).
+// DIAG builds also print a frame-time report every 300 frames (slice task C2), tagged with the scene; a summary
+// line per scene when it ends; and the PVR's error events, counted (slice 3D-7 tasks 0A, 0C).
 // ---------------------------------------------------------------------------
 #ifndef BATTLE_DIAG
 #define BATTLE_DIAG 0
 #endif
-#define DIAG(...) do { if (BATTLE_DIAG) { dbgio_printf("[diag] " __VA_ARGS__); dbgio_flush(); } } while (0)
+// Every log line is pushed out before the next statement runs (a crash must not swallow it). Not with dbgio_flush():
+// KOS's scif_flush() clears the SCIF's TEND flag and waits for the chip to set it again; when that times out it
+// switches serial output off for good (scif.c: serial_enabled = 0, "no serial cable"). Flycast does not set TEND
+// again on an idle port, so the first flush - after the boot's first line - silenced the whole log there. This
+// waits for TEND (SCFSR2 bit 6: transmission ended) without clearing it and never disables anything; after one
+// timeout it stops waiting (an emulator: the bytes are already out).
+static void log_flush() {
+    static bool waits = true;
+    if (!waits) return;
+    volatile uint16_t* const scfsr2 = (volatile uint16_t*)0xffe80010;
+    int timeout = 800000;
+    while (!(*scfsr2 & 0x40) && timeout > 0) --timeout;
+    if (timeout <= 0) waits = false;
+}
+#define DIAG(...) do { if (BATTLE_DIAG) { dbgio_printf("[diag] " __VA_ARGS__); log_flush(); } } while (0)
 static int g_diag_frame = 0;
 #define DIAG_F(...) do { if (BATTLE_DIAG && g_diag_frame <= 3) DIAG(__VA_ARGS__); } while (0)
 
@@ -57,8 +74,78 @@ static int g_diag_frame = 0;
 // first two frames ~6 each, then one line at frames 60 and 600; nothing after that.
 static uint64_t g_boot_ms0 = 0;
 #define BOOT(...) do { dbgio_printf("[boot %5lu ms] ", (unsigned long)(timer_ms_gettime64() - g_boot_ms0)); \
-                       dbgio_printf(__VA_ARGS__); dbgio_flush(); } while (0)
+                       dbgio_printf(__VA_ARGS__); log_flush(); } while (0)
 #define BOOT_F(...) do { if (g_diag_frame <= 2) BOOT(__VA_ARGS__); } while (0)
+
+// Slice 3D-7, task 0B (docs/NEXT_SLICE_SOUND_SAVE.md 3): where main RAM stands, in every build's boot log. The
+// program image (code, data, the embedded romdisk, BSS) ends where the heap starts; newlib's malloc grows the heap
+// with sbrk() up to the top of RAM minus the kernel stack (KOS kernel/mm/mm.c). "free" = RAM sbrk() never claimed +
+// free blocks inside the heap. The image end is sbrk(0) - mallinfo().arena (everything sbrk() handed out went to
+// malloc), which avoids the linker symbol `end` (a common local name in this file).
+static void ram_report(const char* when) {
+    const struct mallinfo mi = mallinfo();
+    const uintptr_t brk = (uintptr_t)sbrk(0);
+    const uintptr_t img_end = brk - (uintptr_t)mi.arena;
+    const uintptr_t top = (uintptr_t)_arch_mem_top - THD_KERNEL_STACK_SIZE;
+    const unsigned long unclaimed = brk < top ? (unsigned long)(top - brk) : 0;
+    BOOT("ram %s: image end %08lx (image %lu KiB, of it BSS %lu KiB), heap %lu KiB claimed / %lu KiB in use, "
+         "free main RAM %lu KiB (%lu never claimed + %lu free in the heap) of %lu KiB\n", when,
+         (unsigned long)img_end, (unsigned long)((img_end - 0x8c010000u) / 1024),
+         (unsigned long)((img_end - (uintptr_t)_bss_start) / 1024),
+         (unsigned long)mi.arena / 1024, (unsigned long)mi.uordblks / 1024,
+         (unclaimed + (unsigned long)mi.fordblks) / 1024, unclaimed / 1024, (unsigned long)mi.fordblks / 1024,
+         (unsigned long)(((uintptr_t)_arch_mem_top - 0x8c000000u) / 1024));
+}
+
+#if BATTLE_DIAG
+// Slice 3D-7, task 0C: the PVR's error interrupts, counted (the GDD's "0 TA stream errors" becomes checkable). This
+// KOS hooks them only when it was built with PVR_RENDER_DBG (kernel/arch/dreamcast/hardware/pvr/
+// pvr_init_shutdown.c); a stock build leaves them unhandled and disabled. DIAG builds install a counting handler
+// that chains to whatever was registered before, then enable the events exactly as KOS's own debug path does.
+// The handler runs in interrupt context: it only increments a counter.
+static const uint16_t TA_ERR_CODE[] = { ASIC_EVT_PVR_ISP_OUTOFMEM, ASIC_EVT_PVR_STRIP_HALT, ASIC_EVT_PVR_PARAM_OUTOFMEM,
+                                        ASIC_EVT_PVR_OPB_OUTOFMEM, ASIC_EVT_PVR_TA_INPUT_ERR, ASIC_EVT_PVR_TA_INPUT_OVERFLOW };
+static const char* const TA_ERR_NAME[] = { "isp_oom", "strip_halt", "param_oom", "opb_oom", "input_err", "input_overflow" };
+const int TA_ERRS = (int)(sizeof TA_ERR_CODE / sizeof TA_ERR_CODE[0]);
+static volatile uint32_t g_ta_err[TA_ERRS];
+static asic_evt_handler_entry_t g_ta_prev[TA_ERRS];
+static void ta_err_irq(uint32_t code, void* data) {
+    const int i = (int)(uintptr_t)data;
+    g_ta_err[i] = g_ta_err[i] + 1;
+    if (g_ta_prev[i].hdl) g_ta_prev[i].hdl(code, g_ta_prev[i].data);
+}
+static void ta_err_install() {
+    for (int i = 0; i < TA_ERRS; ++i) {
+        g_ta_prev[i] = asic_evt_set_handler(TA_ERR_CODE[i], ta_err_irq, (void*)(uintptr_t)i);
+        asic_evt_enable(TA_ERR_CODE[i], ASIC_IRQ_DEFAULT);
+    }
+}
+static uint32_t ta_err_total() { uint32_t n = 0; for (int i = 0; i < TA_ERRS; ++i) n += g_ta_err[i]; return n; }
+
+// Slice 3D-7, task 0A: frame times per scene. A scene is the game's mode plus its map or battle kind
+// (bt::game_scene_tag: "title", "field:village", "battle:boss", "map_change:barrow"...). When the scene changes, one
+// line sums up the scene that ended, so a single playthrough log gives every scene's worst frame; load hitches under
+// a fade land in their own scenes (map_change, to_title...), apart from the gameplay ones.
+struct SceneProbe { char tag[32]; uint32_t frames, worst_us, over; uint64_t sum_us; int max_ticks; uint32_t ta0; };
+static SceneProbe g_scene = { "boot", 0, 0, 0, 0, 0, 0 };
+static void scene_probe(const char* tag, uint32_t work_us, int ticks) {
+    if (strcmp(tag, g_scene.tag) != 0) {
+        if (g_scene.frames)
+            DIAG("scene %s: %lu frames, worst CPU frame %lu us, average %lu us, frames over 16.7 ms: %lu, most ticks in a frame %d, TA errors %lu\n",
+                 g_scene.tag, (unsigned long)g_scene.frames, (unsigned long)g_scene.worst_us,
+                 (unsigned long)(g_scene.sum_us / g_scene.frames), (unsigned long)g_scene.over, g_scene.max_ticks,
+                 (unsigned long)(ta_err_total() - g_scene.ta0));
+        memset(&g_scene, 0, sizeof g_scene);
+        strncpy(g_scene.tag, tag, sizeof g_scene.tag - 1);
+        g_scene.ta0 = ta_err_total();
+    }
+    ++g_scene.frames;
+    g_scene.sum_us += work_us;
+    if (work_us > g_scene.worst_us) g_scene.worst_us = work_us;
+    if (work_us > 16667) ++g_scene.over;
+    if (ticks > g_scene.max_ticks) g_scene.max_ticks = ticks;
+}
+#endif
 
 struct Sprite {
     kos_img_t img;
@@ -468,7 +555,9 @@ void set_fog(bool on, uint32_t rgb, float start, float end) {
 #endif
 }
 
-void audio_event(const char*) {}                 // slice 3D-6: no audio path yet (the hooks only; see engine.h)
+// Slice 3D-7: the hooks feed the audio logic (src/audio.cpp), which queues them and issues the snd_* commands
+// from audio_frame(); platform/kos/audio_kos.cpp carries them out on the AICA.
+void audio_event(const char* name) { bt::audio_event(name); }
 
 void set_clear_color(uint32_t rgb) {
     pvr_set_bg_color((float)((rgb >> 16) & 255) / 255.0f, (float)((rgb >> 8) & 255) / 255.0f, (float)(rgb & 255) / 255.0f);
@@ -502,7 +591,7 @@ float random01() {
 
 // Game messages (dmf: ..., map errors) use the same path as the breadcrumbs: dbgio directly,
 // independent of dbglog's level filter.
-void dbg_print(const char* s) { dbgio_printf("%s\n", s); dbgio_flush(); }
+void dbg_print(const char* s) { dbgio_printf("%s\n", s); log_flush(); }
 void boot_log(const char* s) { BOOT("%s\n", s); }
 
 int file_read(const char* path, char* buf, int cap) {
@@ -513,6 +602,15 @@ int file_read(const char* path, char* buf, int cap) {
     if (n < 0 || n >= cap) return -1;
     buf[n] = '\0';
     return n;
+}
+
+int file_read_at(const char* path, int offset, void* buf, int n) {
+    file_t f = fs_open(path, O_RDONLY);
+    if (f < 0) return -1;
+    int got = -1;
+    if (fs_seek(f, (off_t)offset, SEEK_SET) == (off_t)offset) got = (int)fs_read(f, buf, (size_t)n);
+    fs_close(f);
+    return got;
 }
 
 bool file_exists(const char* path) {
@@ -566,6 +664,11 @@ int main(int, char**) {
          (unsigned long)(pvr_mem_available() / 1024));
     DIAG("main: pvr+dbgio up. sizeof(pvr_vertex_t)=%u sizeof(::Sprite)=%u\n",
          (unsigned)sizeof(pvr_vertex_t), (unsigned)sizeof(::Sprite));
+#if BATTLE_DIAG
+    ta_err_install();
+    DIAG("main: PVR error events counted (%d kinds)\n", TA_ERRS);
+#endif
+    ram_report("before game_init");
 
     check_file("/rd/maps/village.txt");
     check_file("/rd/tiles.png");
@@ -628,6 +731,7 @@ int main(int, char**) {
 #else
     DIAG("main: DIAG_SKIP_GAME - game code disabled\n");
 #endif
+    ram_report("after game_init");
 
     // Fixed 60 Hz timestep (slice task A5): accumulate elapsed microseconds x60 and run one
     // game tick per 1,000,000 (exact, no drift). At most 4 catch-up ticks per displayed frame.
@@ -652,6 +756,9 @@ int main(int, char**) {
             ++steps;
         }
         if (steps == 4) acc60 = 0;               // fell far behind (e.g. after loading): drop the backlog
+#if !defined(DIAG_SKIP_GAME) && !defined(DIAG_SKIP_UPDATE)
+        bt::audio_frame();                       // slice 3D-7: this frame's sounds, after its ticks (at most 8 commands)
+#endif
         BOOT_F("frame %d: %d tick(s) done\n", g_diag_frame, steps);
         DIAG_F("frame %d: %d tick(s)\n", g_diag_frame, steps);
 
@@ -701,18 +808,36 @@ int main(int, char**) {
         uint32_t work_us = (uint32_t)((draw_start - work_start) + (done - draw_start));
         if (work_us > worst_us) worst_us = work_us;
         if (work_us > 16667) ++over_budget;
-        if (BATTLE_DIAG && g_diag_frame % 300 == 0) {
+#if BATTLE_DIAG
+        char scene_tag[32] = "nogame";
+#if !defined(DIAG_SKIP_GAME)
+        bt::game_scene_tag(scene_tag, (int)sizeof scene_tag);
+#endif
+        scene_probe(scene_tag, work_us, steps);
+        if (g_diag_frame % 300 == 0) {
             int heap_now = mallinfo().uordblks;
-            DIAG("frames %d: worst CPU frame %lu us, frames over 16.7 ms: %lu, heap in use %d B (%+d since last report)\n",
-                 g_diag_frame, (unsigned long)worst_us, (unsigned long)over_budget, heap_now, heap_now - heap_prev);
+            DIAG("frames %d [%s]: worst CPU frame %lu us, frames over 16.7 ms: %lu, heap in use %d B (%+d since last report)\n",
+                 g_diag_frame, scene_tag, (unsigned long)worst_us, (unsigned long)over_budget, heap_now, heap_now - heap_prev);
+            DIAG("  TA errors since boot: %s %lu, %s %lu, %s %lu, %s %lu, %s %lu, %s %lu\n",
+                 TA_ERR_NAME[0], (unsigned long)g_ta_err[0], TA_ERR_NAME[1], (unsigned long)g_ta_err[1],
+                 TA_ERR_NAME[2], (unsigned long)g_ta_err[2], TA_ERR_NAME[3], (unsigned long)g_ta_err[3],
+                 TA_ERR_NAME[4], (unsigned long)g_ta_err[4], TA_ERR_NAME[5], (unsigned long)g_ta_err[5]);
             pvr_stats_t ps;
             pvr_get_stats(&ps);
             DIAG("  3D: arena peak %d/%d verts, drops %d; PVR vtx buffer peak %lu B, %.1f fps\n",
                  g_arena_peak, ARENA_VERTS, g_arena_drops, (unsigned long)ps.vtx_buffer_used_max, (double)ps.frame_rate);
+            {   // slice 3D-7 (DoD P2): the music stream must be polled more often than its buffer lasts
+                const SndKosStats ss = snd_kos_stats();
+                DIAG("  audio: longest gap between stream polls %lu ms (buffer %d ms), poll errors %lu, %lu tracks started, %lu effects played\n",
+                     (unsigned long)ss.poll_gap_ms, ss.stream_ms, (unsigned long)ss.poll_errors, (unsigned long)ss.starts, (unsigned long)ss.sfx_played);
+            }
             g_arena_peak = 0;
             heap_prev = heap_now;
             worst_us = 0;
         }
+#else
+        (void)worst_us; (void)over_budget; (void)heap_prev;
+#endif
         vid_waitvbl();
     }
 }

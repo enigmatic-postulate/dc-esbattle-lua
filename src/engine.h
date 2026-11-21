@@ -130,6 +130,16 @@ float random01();
 // swing, the boss theme... The game has no audio path yet: the KOS backend ignores it, the host writes an `A` line
 // to the trace, so the future audio track attaches here without touching game code.
 void audio_event(const char* name);
+// Slice 3D-7 (docs/NEXT_SLICE_SOUND_SAVE.md 5.4): the sound backend. src/audio.cpp turns the events into these
+// commands, at most a few per displayed frame; ids index the bank given to snd_boot. KOS: snd_sfx_* on AICA
+// channels and one snd_stream for the music (platform/kos); the host records them (`AC` trace lines).
+struct SndBank { int nsfx; const char* const* sfx_path; int nmusic; const char* const* music_path; };   // .adp files (src/adpcm.h)
+bool snd_boot(const SndBank& bank);                    // boot only: effects into sound RAM, the stream ready. false: no sound
+// Plays effect `sfx` on voice 0..7 (whatever that voice was playing stops). vol 0..255, pan 0..255 (128 = centre).
+void snd_play(int voice, int sfx, int vol, int pan);
+// The music stream: starts `track` at `start_sample` (0 unless the track is PCM), or stops (track -1).
+void snd_music(int track, uint32_t start_sample, int vol, bool loop);
+void snd_music_volume(int vol);                        // 0..255, while a fade or a duck runs
 void  dbg_print(const char* s);
 // Boot/progress breadcrumb: always on in the Dreamcast build (serial log, flushed at once,
 // with a millisecond timestamp), silent on the host. A log that stops after a breadcrumb
@@ -139,6 +149,8 @@ void  boot_log(const char* s);
 // Reads a whole file (e.g. "/rd/maps/test_field.txt") into buf, NUL-terminated.
 // Returns the byte count, or -1 if missing / larger than cap-1.
 int file_read(const char* path, char* buf, int cap);
+// Slice 3D-7: reads n bytes at `offset` of a file of any size (a sound's header). Returns the bytes read, or -1.
+int file_read_at(const char* path, int offset, void* buf, int n);
 bool file_exists(const char* path);
 
 } // namespace eng

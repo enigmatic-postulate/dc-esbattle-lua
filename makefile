@@ -2,14 +2,16 @@
 # C++ battle port (KOS + PVR) - no Lua.
 #
 TARGET = battle.elf
+# A plain `make` builds `all`, wherever the rules below end up in this file.
+.DEFAULT_GOAL := all
 
-SRC_OBJS = src/ai.o src/anim.o src/arena.o src/assets.o src/battle.o src/battle3d.o src/battle3d_draw.o src/chars.o src/combat.o src/dmf.o src/encounters.o src/field.o \
+SRC_OBJS = src/ai.o src/anim.o src/arena.o src/assets.o src/audio.o src/battle.o src/battle3d.o src/battle3d_draw.o src/chars.o src/combat.o src/dmf.o src/encounters.o src/field.o \
            src/field3d.o src/font.o src/fx.o src/game.o src/hpbar.o src/icons.o src/input.o \
            src/input_probe.o src/models.o src/presentation.o src/render3d.o src/skills.o src/status.o \
            src/targeting.o src/turn_system.o src/ui.o \
            src/dialog_ui.o src/portrait.o src/progress.o src/script.o src/text.o \
            src/lights.o src/screens.o src/transitions.o src/uitext.o
-OBJS = platform/kos/main.o $(SRC_OBJS) romdisk.o
+OBJS = platform/kos/main.o platform/kos/audio_kos.o $(SRC_OBJS) romdisk.o
 
 # romdisk/: PNGs, maps/ and models/*.dmf (rebuild models with tools/dmf/build_models.sh)
 KOS_ROMDISK_DIR = romdisk
@@ -85,6 +87,16 @@ ifdef CEL
 KOS_CFLAGS += -DCEL_DEFAULT=$(CEL)
 endif
 
+# Slice 3D-7 sound (platform/kos/audio_kos.cpp; TRIAGE): make NO_AUDIO=1 builds the game silent, exactly as slice
+# 3D-6 was (the AICA is never touched); make NO_MUSIC=1 keeps the effects and leaves out the music stream and its
+# thread. make clean first (make does not track flag changes).
+ifdef NO_AUDIO
+KOS_CFLAGS += -DNO_AUDIO=1
+endif
+ifdef NO_MUSIC
+KOS_CFLAGS += -DNO_MUSIC=1
+endif
+
 # Debug pad overlay (top left, over the objective HUD): on in DIAG builds, or make INPUT_OVERLAY=1
 ifdef INPUT_OVERLAY
 KOS_CFLAGS += -DINPUT_OVERLAY=1
@@ -109,7 +121,17 @@ KOS_CFLAGS += -DDIAG_SKIP_DRAW
 endif
 endif
 
+# Slice 3D-7 (task A0): KOS's romdisk.img rule (Makefile.rules) has no prerequisites, so an edited file under
+# romdisk/ never rebuilt the image on its own. Every file under romdisk/, at any depth, is now a prerequisite (the
+# recipe stays KOS's). Pure make functions: no `find`, whose name Windows also uses for a different tool.
+# File names with spaces are not supported (the romdisk has none).
+rwildcard = $(foreach d,$(wildcard $(1)/*),$(if $(wildcard $(d)/*),$(call rwildcard,$(d)),$(d)))
+ROMDISK_FILES := $(filter-out %/.gitignore %/.DS_Store %/Thumbs.db,$(call rwildcard,$(KOS_ROMDISK_DIR)))
+# (This rule sits below `all` on purpose: the first target in a makefile is what a plain `make` builds.)
+
 all: rm-elf sh4zam-check $(TARGET)
+
+romdisk.img: $(ROMDISK_FILES)
 
 ifneq ($(KOS_BASE),)
 include $(KOS_BASE)/Makefile.rules
@@ -141,7 +163,7 @@ endif
 clean: rm-elf
 	-rm -f $(OBJS) $(OBJS:.o=.d)
 
--include $(SRC_OBJS:.o=.d) platform/kos/main.d
+-include $(SRC_OBJS:.o=.d) platform/kos/main.d platform/kos/audio_kos.d
 
 rm-elf:
 	-rm -f $(TARGET) romdisk.*

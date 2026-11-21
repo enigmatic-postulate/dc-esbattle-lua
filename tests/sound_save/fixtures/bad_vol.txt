@@ -1,0 +1,1 @@
+sfx hit sfx/hit.adp 300 5 2

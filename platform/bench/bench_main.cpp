@@ -31,6 +31,11 @@ void set_clear_color(uint32_t) {}
 bool texture_update_vq(Sprite, const void*, int) { return true; }   // slice 3D-6 (the barrow's ground): a 130 KiB copy
 void set_fog(bool, uint32_t, float, float) {}                          // slice 3D-6: PVR registers
 void audio_event(const char*) {}
+bool snd_boot(const SndBank&) { return false; }                        // slice 3D-7: the bench has no sound
+void snd_play(int, int, int, int) {}
+void snd_music(int, uint32_t, int, bool) {}
+void snd_music_volume(int) {}
+int file_read_at(const char*, int, void*, int) { return -1; }
 bool file_exists(const char* path) {
     char p[512]; snprintf(p, sizeof p, "romdisk/%s", strncmp(path, "/rd/", 4) == 0 ? path + 4 : path);
     FILE* f = fopen(p, "rb"); if (!f) return false; fclose(f); return true;
